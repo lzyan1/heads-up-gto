@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Heads up · Study</title><link rel="stylesheet" href="/style.css"><script src="/app.js" type="module"></script></head>
+<body>
+<header class="header">
+  <a class="brand" href="/" aria-label="Heads up home"><span class="brand-mark">hu<span>↗</span></span><span>Heads up</span></a>
+  <span class="study-label">STUDY</span><span class="local-label"><i></i> Local workspace</span>
+  <div class="header-tools"><button id="settings-open" class="settings-button">Settings</button><button id="new-hand" class="quiet">↺ New hand</button></div>
+</header>
+<nav id="action-strip" class="action-strip" aria-label="Hand action history"></nav>
+<div id="error" class="error" role="alert" hidden></div>
+<div class="workspace-bar">
+  <div class="view-tabs" role="tablist" aria-label="Range display"><button role="tab" aria-selected="true" data-view="strategy">Strategy</button><button role="tab" aria-selected="false" data-view="ranges">Ranges</button><button role="tab" aria-selected="false" data-view="breakdown">Breakdown</button></div>
+  <div id="study-status" class="study-status" role="status">Loading your preflop charts…</div>
+  <div class="solve-tools"><button id="stop" hidden>Stop</button><button id="resume" hidden>Train more</button><button id="refine" hidden>Refine decision</button><button id="export" class="quiet" hidden>Export ↗</button></div>
+</div>
+<div class="progress-track"><div id="progress"></div></div>
+<main class="study-layout">
+  <section class="range-panel" aria-label="Hand range">
+    <div class="range-heading"><div><strong id="range-player">SB</strong><span id="range-street">Preflop</span></div><span id="range-caption">100 BB · Heads-up</span></div>
+    <div id="range-grid" class="range-grid" aria-label="Starting hand strategy"></div>
+    <div class="range-footer"><div id="legend" class="legend"></div><span class="grid-instruction">Hover to inspect · click to pin</span></div>
+  </section>
+  <aside class="detail-panel" aria-label="Strategy details">
+    <div class="overview-heading"><span>Overview</span><span id="coverage" class="muted"></span></div>
+    <div class="spot-overview"><div class="players"><div id="bb-badge" class="seat"><b>BB</b><span id="bb-stack">99</span></div><div id="sb-badge" class="seat"><b>SB</b><span id="sb-stack">99.5</span></div></div><div class="pot"><strong id="pot">1.5 BB</strong><span id="street-label">Preflop</span></div><div id="board" class="board"></div></div>
+    <section class="actions-section"><div class="section-label"><span>Actions</span><span id="action-hint">Click to continue</span></div><div id="action-list" class="action-list"></div><div id="action-bar" class="action-bar"></div><div id="decision-message" class="decision-message" hidden></div></section>
+    <section class="hands-section"><div class="hands-heading"><div><strong id="hand-title">Hands</strong><span id="hand-subtitle">Hover over the range</span></div><button id="unpin" class="quiet" hidden>Unpin ×</button></div><div id="hand-summary" class="hand-summary"></div><div id="combo-grid" class="combo-grid"><div class="empty-detail"><span>↖</span><strong>A closer look at every hand.</strong><p>Hover over the range to see each suit combination and its action frequencies.</p></div></div></section>
+    <p id="result-note" class="result-note"></p>
+  </aside>
+</main>
+<footer class="footer"><span id="source-label">GTO Wizard · hardcoded preflop</span><span>100 BB · 0.5 / 1 blinds · no rake</span><span>Experimental approximate solver</span></footer>
+<dialog id="card-dialog" class="card-dialog" aria-labelledby="card-title">
+  <div class="dialog-heading"><div><span class="eyebrow" id="card-eyebrow">NEXT STREET</span><h2 id="card-title">Choose the flop</h2></div><button id="card-close" class="icon-button" aria-label="Close card picker">×</button></div>
+  <div class="picker-top"><div id="selected-cards" class="selected-cards"></div><div class="picker-tools"><button id="clear-cards" class="quiet">Clear</button><button id="random-cards" class="quiet">Shuffle ↝</button></div></div>
+  <div id="deck" class="deck" aria-label="Choose board cards"></div>
+  <div class="picker-bottom"><p id="card-help">Choose three cards to start a solve.</p><button id="confirm-cards" class="primary" disabled>Solve continuation</button></div>
+  <p id="card-error" class="dialog-error" role="alert" hidden></p>
+</dialog>
+<dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
+  <div class="dialog-heading"><div><span class="eyebrow">WORKSPACE</span><h2 id="settings-title">Study settings</h2></div><button id="settings-close" class="icon-button" aria-label="Close settings">×</button></div>
+  <form id="settings-form">
+    <div class="two">
+      <div><label for="stop-mode">Stop after</label><select id="stop-mode"><option value="iterations">Number of iterations</option><option value="time">Time limit</option></select></div>
+      <div id="iteration-field"><label for="iterations">Iterations per run</label><input id="iterations" type="number" min="10" step="1" value="2000" required></div>
+      <div id="time-field" hidden><label for="time-limit">Time limit (seconds)</label><input id="time-limit" type="number" min="0.1" step="any" value="60" disabled required></div>
+    </div>
+    <p class="hint">Applies to the next solve, refinement or Train more. Each timed run gets a fresh time limit and finishes its current iteration before stopping. You can stop early at any time.</p>
+    <label for="mode">Card model</label><select id="mode"><option value="bucketed">Strength buckets</option><option value="exact">Exact cards</option></select>
+    <p class="hint" id="card-model-help">Hands in the same strength bucket share a strategy.</p>
+    <details><summary>Training · advanced settings</summary>
+      <div id="bucket-settings" class="two"><div><label for="buckets">Strength buckets</label><input id="buckets" type="number" min="4" max="32" step="1" value="8" required></div><div><label for="samples">Equity samples</label><input id="samples" type="number" min="8" max="256" step="1" value="24" required></div></div>
+      <div class="two"><div><label for="seed">Random seed</label><input id="seed" type="number" min="0" max="2147483647" step="1" value="7" required></div><div><label for="max-nodes">Decision limit (optional)</label><input id="max-nodes" type="number" min="1" step="1" placeholder="Unlimited"></div></div>
+      <p class="hint">Leave the decision limit blank for no cap. Reaching a chosen limit keeps partial results; increase or clear it to train more.</p>
+    </details>
+    <details><summary>Load a specific spot</summary><label for="preflop-input">Preflop action sequence</label><input id="preflop-input" value="raise:2.5 / call" spellcheck="false"><p class="hint">SB acts first. Example: raise:2.5 / raise:11.5 / call</p><label for="flop-input">Flop</label><input id="flop-input" value="As Kd 7c" spellcheck="false"><button id="load-spot" type="button" class="secondary">Load spot &amp; solve</button></details>
+    <p class="hint">GTO Wizard preflop charts are fixed. Card model, buckets, samples and seed apply to new solves and refinements. Train more keeps the existing card model and strategy.</p>
+    <p id="settings-error" class="dialog-error" role="alert" hidden></p><div class="settings-actions"><button id="download-chart" type="button" class="quiet">Download charts ↓</button><button type="submit" class="primary">Save settings</button></div>
+  </form>
+</dialog>
+</body></html>

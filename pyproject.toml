@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "heads-up-gto"
+version = "0.1.0"
+description = "Local, experimental heads-up postflop MCCFR study tool"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+heads-up-gto = "heads_up_gto.server:main"
+
+[tool.setuptools.package-data]
+heads_up_gto = ["static/*"]
