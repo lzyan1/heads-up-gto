@@ -302,6 +302,9 @@ class Solver:
         avg = node.average() if node and node.updates > 0 else None
         return avg, node.updates if node else 0, node.averages if node else 0
 
+    def prepare_policies(self, state, hands):
+        """Optional batch-inference hook; tabular lookups need no preparation."""
+
     def locate(self, path):
         """Condition ranges along the stored policy; disclose untrained fallbacks."""
         state = self.root
@@ -324,6 +327,7 @@ class Solver:
             action_index = list(actions).index(step)
             actor = state.actor
             updated = {}
+            self.prepare_policies(state, ranges[actor])
             for hand, weight in ranges[actor].items():
                 probs, _, _ = self.policy(state, hand)
                 if probs is None:
@@ -378,6 +382,7 @@ class Solver:
             card_mass[b] += w
         rows, aggregate = [], [0.0] * len(actions)
         total, covered = 0.0, 0.0
+        self.prepare_policies(state, ranges[actor])
         for hand, weight in ranges[actor].items():
             mass = max(0, other_total - card_mass[hand[0]] - card_mass[hand[1]] + ranges[other].get(hand, 0))
             joint = weight * mass

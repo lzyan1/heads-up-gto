@@ -16,7 +16,7 @@ from .cards import parse_cards, combo_text
 from .game import Settings, State
 from .sizing import profile_for, sizing_metadata
 from .preflop import chart_ranges, reconstruct
-from .solver import Solver
+from .backends import create_solver
 from .screenshot_charts import screenshot_chart
 from .navigation import preflop_view
 
@@ -71,7 +71,7 @@ def prepare(payload):
     approximation = {"frequency_step": chart["frequency_step"], "source": chart["provenance"]["source"], "jam_restriction": chart["provenance"]["jam_restriction"]}
     profile = profile_for(preflop.pot, preflop.stacks)
     root = State(preflop.pot, preflop.stacks, board, sizing_profile=profile)
-    solver = Solver(root, ranges, settings)
+    solver = create_solver(root, ranges, settings)
     return solver, budget, {"name": name, "is_demo": is_demo, "range_source": "wizard", "sizing_status": dict.fromkeys(("flop", "turn", "river"), "scenario_heuristic"), "sizing": sizing_metadata(profile), "preflop": preflop.history, "combos": [len(r) for r in ranges], "weighted_combos": [round(sum(r.values()), 2) for r in ranges], "pot": root.pot, "stacks": root.stacks, "settings": asdict(settings), "training_budget": budget, "range_approximation": approximation}
 
 
@@ -212,7 +212,7 @@ class Handler(BaseHTTPRequestHandler):
                         if state.terminal or state.pending:
                             raise ValueError("Refine an active decision after dealing the next board card.")
                         settings = app_settings(payload.get("settings", asdict(job["solver"].settings)))
-                        solver = Solver(replace(state, path=()), ranges, settings)
+                        solver = create_solver(replace(state, path=()), ranges, settings)
                         metadata = {**job["metadata"], "pot": state.pot, "stacks": state.stacks, "combos": [len(r) for r in ranges], "local_refinement": True, "parent_path": node_path, "fallback_used": fallback, "settings": asdict(settings), "training_budget": budget}
                         request = {"original": job["request"], "refine_path": node_path}
                         new_job = {"id": uuid.uuid4().hex, "solver": solver, "metadata": metadata, "request": request, "stats": running_stats(solver, budget), "busy": True}

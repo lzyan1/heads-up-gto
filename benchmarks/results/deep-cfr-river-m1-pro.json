@@ -1,0 +1,817 @@
+{
+  "platform": "macOS-15.7.3-arm64-arm-64bit-Mach-O",
+  "street": "river",
+  "requested_seconds_per_run": 15.0,
+  "runs": [
+    {
+      "backend": "tabular",
+      "device": "cpu",
+      "seed": 7,
+      "settings": {
+        "sizes": [
+          [
+            0.33,
+            0.75
+          ],
+          [
+            0.5,
+            1.0
+          ],
+          [
+            0.75,
+            1.25
+          ]
+        ],
+        "raise_multiplier": 3.0,
+        "max_raises": 1,
+        "include_all_in": true,
+        "buckets": 8,
+        "equity_samples": 24,
+        "mode": "exact",
+        "chance_mode": "sampled",
+        "seed": 7,
+        "max_nodes": null,
+        "backend": "tabular",
+        "deep_device": "cpu",
+        "deep_hidden": 128,
+        "deep_buffer_size": 25000,
+        "deep_traversals": 128,
+        "deep_train_steps": 256,
+        "deep_batch_size": 256,
+        "deep_inference_batch": 32
+      },
+      "initial_exploitability_bb": 0.96875,
+      "stats": {
+        "status": "complete",
+        "iterations": 52972,
+        "target": null,
+        "nodes": 24,
+        "seconds": 15.0,
+        "run_seconds": 15.0,
+        "time_limit_seconds": 15.0,
+        "mode": "exact",
+        "exploitability": null,
+        "attempted_iterations": 52972,
+        "completed_traversals": [
+          52972,
+          52972
+        ],
+        "interrupted_iterations": 0,
+        "partial_updates_possible": false,
+        "tree_visits": 856594,
+        "max_nodes": null,
+        "chance_mode": "sampled",
+        "enumerated_turns": 0,
+        "policy_update": "simultaneous_frozen"
+      },
+      "exploitability_bb": 0.010163119071319893,
+      "views": {
+        "root": {
+          "coverage": 1.0,
+          "prediction_coverage": null,
+          "training": {
+            "hands": 2,
+            "counts": {
+              "unseen": 0,
+              "average_only": 0,
+              "regret_only": 0,
+              "low_samples": 0,
+              "sampled": 2
+            },
+            "mass": {
+              "unseen": 0.0,
+              "average_only": 0.0,
+              "regret_only": 0.0,
+              "low_samples": 0.0,
+              "sampled": 1.0
+            },
+            "regret_updates": {
+              "min": 26298,
+              "median": 26486.0,
+              "p90": 26298,
+              "max": 26674,
+              "total": 52972
+            },
+            "average_samples": {
+              "min": 26298,
+              "median": 26486.0,
+              "p90": 26298,
+              "max": 26674,
+              "total": 52972
+            },
+            "sample_threshold": 200,
+            "notice": "Sample counts are not a convergence or exploitability certificate."
+          },
+          "aggregate": [
+            0.3108943078002969,
+            0.005468421883118384,
+            0.16810885440490259,
+            0.5155284159116821
+          ]
+        }
+      }
+    },
+    {
+      "backend": "deep_cfr",
+      "device": "cpu",
+      "seed": 7,
+      "settings": {
+        "sizes": [
+          [
+            0.33,
+            0.75
+          ],
+          [
+            0.5,
+            1.0
+          ],
+          [
+            0.75,
+            1.25
+          ]
+        ],
+        "raise_multiplier": 3.0,
+        "max_raises": 1,
+        "include_all_in": true,
+        "buckets": 8,
+        "equity_samples": 24,
+        "mode": "exact",
+        "chance_mode": "sampled",
+        "seed": 7,
+        "max_nodes": null,
+        "backend": "deep_cfr",
+        "deep_device": "cpu",
+        "deep_hidden": 128,
+        "deep_buffer_size": 25000,
+        "deep_traversals": 128,
+        "deep_train_steps": 256,
+        "deep_batch_size": 256,
+        "deep_inference_batch": 32
+      },
+      "initial_exploitability_bb": 0.96875,
+      "stats": {
+        "status": "complete",
+        "iterations": 7,
+        "target": null,
+        "nodes": 24,
+        "seconds": 15.0,
+        "run_seconds": 15.0,
+        "time_limit_seconds": 15.0,
+        "mode": "exact",
+        "exploitability": null,
+        "attempted_iterations": 8,
+        "completed_traversals": [
+          1024,
+          1024
+        ],
+        "interrupted_iterations": 0,
+        "partial_updates_possible": false,
+        "tree_visits": 17753,
+        "max_nodes": null,
+        "chance_mode": "sampled",
+        "enumerated_turns": 0,
+        "policy_update": "alternating_deep_cfr",
+        "backend": "deep_cfr",
+        "device": "cpu",
+        "iteration_unit": "neural rounds",
+        "phase": "average_1",
+        "phase_step": 113,
+        "phase_total": 256,
+        "pending_round": true,
+        "prediction_ready": true,
+        "tracking_limit": 50000,
+        "tracking_saturated": false,
+        "replay_capacity_bytes": 230500000,
+        "replay": [
+          {
+            "size": 1915,
+            "capacity": 25000,
+            "seen": 1915
+          },
+          {
+            "size": 1224,
+            "capacity": 25000,
+            "seen": 1224
+          },
+          {
+            "size": 2057,
+            "capacity": 25000,
+            "seen": 2057
+          },
+          {
+            "size": 4310,
+            "capacity": 25000,
+            "seen": 4310
+          }
+        ],
+        "losses": {
+          "advantage_0": 0.40450018644332886,
+          "advantage_1": 0.534038782119751,
+          "average_0": 0.15686535835266113,
+          "average_1": 0.22670742869377136
+        }
+      },
+      "exploitability_bb": 0.2264640026477483,
+      "views": {
+        "root": {
+          "coverage": 1.0,
+          "prediction_coverage": 1.0,
+          "training": {
+            "hands": 2,
+            "counts": {
+              "unseen": 0,
+              "average_only": 0,
+              "regret_only": 0,
+              "low_samples": 0,
+              "sampled": 2
+            },
+            "mass": {
+              "unseen": 0.0,
+              "average_only": 0.0,
+              "regret_only": 0.0,
+              "low_samples": 0.0,
+              "sampled": 1.0
+            },
+            "regret_updates": {
+              "min": 483,
+              "median": 512.0,
+              "p90": 483,
+              "max": 541,
+              "total": 1024
+            },
+            "average_samples": {
+              "min": 498,
+              "median": 512.0,
+              "p90": 498,
+              "max": 526,
+              "total": 1024
+            },
+            "sample_threshold": 200,
+            "notice": "Sample counts are not a convergence or exploitability certificate."
+          },
+          "aggregate": [
+            0.23381081968545914,
+            0.1995321363210678,
+            0.18197660148143768,
+            0.38468049466609955
+          ]
+        }
+      }
+    },
+    {
+      "backend": "deep_cfr",
+      "device": "mps",
+      "seed": 7,
+      "settings": {
+        "sizes": [
+          [
+            0.33,
+            0.75
+          ],
+          [
+            0.5,
+            1.0
+          ],
+          [
+            0.75,
+            1.25
+          ]
+        ],
+        "raise_multiplier": 3.0,
+        "max_raises": 1,
+        "include_all_in": true,
+        "buckets": 8,
+        "equity_samples": 24,
+        "mode": "exact",
+        "chance_mode": "sampled",
+        "seed": 7,
+        "max_nodes": null,
+        "backend": "deep_cfr",
+        "deep_device": "mps",
+        "deep_hidden": 128,
+        "deep_buffer_size": 25000,
+        "deep_traversals": 128,
+        "deep_train_steps": 256,
+        "deep_batch_size": 256,
+        "deep_inference_batch": 32
+      },
+      "initial_exploitability_bb": 0.96875,
+      "stats": {
+        "status": "complete",
+        "iterations": 2,
+        "target": null,
+        "nodes": 24,
+        "seconds": 15.0,
+        "run_seconds": 15.0,
+        "time_limit_seconds": 15.0,
+        "mode": "exact",
+        "exploitability": null,
+        "attempted_iterations": 3,
+        "completed_traversals": [
+          384,
+          384
+        ],
+        "interrupted_iterations": 0,
+        "partial_updates_possible": false,
+        "tree_visits": 6621,
+        "max_nodes": null,
+        "chance_mode": "sampled",
+        "enumerated_turns": 0,
+        "policy_update": "alternating_deep_cfr",
+        "backend": "deep_cfr",
+        "device": "mps",
+        "iteration_unit": "neural rounds",
+        "phase": "average_1",
+        "phase_step": 255,
+        "phase_total": 256,
+        "pending_round": true,
+        "prediction_ready": true,
+        "tracking_limit": 50000,
+        "tracking_saturated": false,
+        "replay_capacity_bytes": 230500000,
+        "replay": [
+          {
+            "size": 855,
+            "capacity": 25000,
+            "seen": 855
+          },
+          {
+            "size": 466,
+            "capacity": 25000,
+            "seen": 466
+          },
+          {
+            "size": 609,
+            "capacity": 25000,
+            "seen": 609
+          },
+          {
+            "size": 1599,
+            "capacity": 25000,
+            "seen": 1599
+          }
+        ],
+        "losses": {
+          "advantage_0": 0.3787633776664734,
+          "advantage_1": 0.6394653916358948,
+          "average_0": 0.20896859467029572,
+          "average_1": 0.30821043252944946
+        }
+      },
+      "exploitability_bb": 0.47783348829355465,
+      "views": {
+        "root": {
+          "coverage": 1.0,
+          "prediction_coverage": 1.0,
+          "training": {
+            "hands": 2,
+            "counts": {
+              "unseen": 0,
+              "average_only": 0,
+              "regret_only": 0,
+              "low_samples": 2,
+              "sampled": 0
+            },
+            "mass": {
+              "unseen": 0.0,
+              "average_only": 0.0,
+              "regret_only": 0.0,
+              "low_samples": 1.0,
+              "sampled": 0.0
+            },
+            "regret_updates": {
+              "min": 177,
+              "median": 192.0,
+              "p90": 177,
+              "max": 207,
+              "total": 384
+            },
+            "average_samples": {
+              "min": 181,
+              "median": 192.0,
+              "p90": 181,
+              "max": 203,
+              "total": 384
+            },
+            "sample_threshold": 200,
+            "notice": "Sample counts are not a convergence or exploitability certificate."
+          },
+          "aggregate": [
+            0.0028393846296239644,
+            0.20986001985147595,
+            0.027811256237328053,
+            0.7594893872737885
+          ]
+        }
+      }
+    },
+    {
+      "backend": "tabular",
+      "device": "cpu",
+      "seed": 23,
+      "settings": {
+        "sizes": [
+          [
+            0.33,
+            0.75
+          ],
+          [
+            0.5,
+            1.0
+          ],
+          [
+            0.75,
+            1.25
+          ]
+        ],
+        "raise_multiplier": 3.0,
+        "max_raises": 1,
+        "include_all_in": true,
+        "buckets": 8,
+        "equity_samples": 24,
+        "mode": "exact",
+        "chance_mode": "sampled",
+        "seed": 23,
+        "max_nodes": null,
+        "backend": "tabular",
+        "deep_device": "cpu",
+        "deep_hidden": 128,
+        "deep_buffer_size": 25000,
+        "deep_traversals": 128,
+        "deep_train_steps": 256,
+        "deep_batch_size": 256,
+        "deep_inference_batch": 32
+      },
+      "initial_exploitability_bb": 0.96875,
+      "stats": {
+        "status": "complete",
+        "iterations": 56078,
+        "target": null,
+        "nodes": 24,
+        "seconds": 15.0,
+        "run_seconds": 15.0,
+        "time_limit_seconds": 15.0,
+        "mode": "exact",
+        "exploitability": null,
+        "attempted_iterations": 56078,
+        "completed_traversals": [
+          56078,
+          56078
+        ],
+        "interrupted_iterations": 0,
+        "partial_updates_possible": false,
+        "tree_visits": 888789,
+        "max_nodes": null,
+        "chance_mode": "sampled",
+        "enumerated_turns": 0,
+        "policy_update": "simultaneous_frozen"
+      },
+      "exploitability_bb": 0.010166119560091613,
+      "views": {
+        "root": {
+          "coverage": 1.0,
+          "prediction_coverage": null,
+          "training": {
+            "hands": 2,
+            "counts": {
+              "unseen": 0,
+              "average_only": 0,
+              "regret_only": 0,
+              "low_samples": 0,
+              "sampled": 2
+            },
+            "mass": {
+              "unseen": 0.0,
+              "average_only": 0.0,
+              "regret_only": 0.0,
+              "low_samples": 0.0,
+              "sampled": 1.0
+            },
+            "regret_updates": {
+              "min": 27988,
+              "median": 28039.0,
+              "p90": 27988,
+              "max": 28090,
+              "total": 56078
+            },
+            "average_samples": {
+              "min": 27988,
+              "median": 28039.0,
+              "p90": 27988,
+              "max": 28090,
+              "total": 56078
+            },
+            "sample_threshold": 200,
+            "notice": "Sample counts are not a convergence or exploitability certificate."
+          },
+          "aggregate": [
+            0.296660831327978,
+            0.006244298832488851,
+            0.057405837465543764,
+            0.6396890323739894
+          ]
+        }
+      }
+    },
+    {
+      "backend": "deep_cfr",
+      "device": "cpu",
+      "seed": 23,
+      "settings": {
+        "sizes": [
+          [
+            0.33,
+            0.75
+          ],
+          [
+            0.5,
+            1.0
+          ],
+          [
+            0.75,
+            1.25
+          ]
+        ],
+        "raise_multiplier": 3.0,
+        "max_raises": 1,
+        "include_all_in": true,
+        "buckets": 8,
+        "equity_samples": 24,
+        "mode": "exact",
+        "chance_mode": "sampled",
+        "seed": 23,
+        "max_nodes": null,
+        "backend": "deep_cfr",
+        "deep_device": "cpu",
+        "deep_hidden": 128,
+        "deep_buffer_size": 25000,
+        "deep_traversals": 128,
+        "deep_train_steps": 256,
+        "deep_batch_size": 256,
+        "deep_inference_batch": 32
+      },
+      "initial_exploitability_bb": 0.96875,
+      "stats": {
+        "status": "complete",
+        "iterations": 9,
+        "target": null,
+        "nodes": 24,
+        "seconds": 15.0,
+        "run_seconds": 15.0,
+        "time_limit_seconds": 15.0,
+        "mode": "exact",
+        "exploitability": null,
+        "attempted_iterations": 10,
+        "completed_traversals": [
+          1280,
+          1152
+        ],
+        "interrupted_iterations": 0,
+        "partial_updates_possible": false,
+        "tree_visits": 21084,
+        "max_nodes": null,
+        "chance_mode": "sampled",
+        "enumerated_turns": 0,
+        "policy_update": "alternating_deep_cfr",
+        "backend": "deep_cfr",
+        "device": "cpu",
+        "iteration_unit": "neural rounds",
+        "phase": "advantage_0",
+        "phase_step": 128,
+        "phase_total": 256,
+        "pending_round": true,
+        "prediction_ready": true,
+        "tracking_limit": 50000,
+        "tracking_saturated": false,
+        "replay_capacity_bytes": 230500000,
+        "replay": [
+          {
+            "size": 2025,
+            "capacity": 25000,
+            "seen": 2025
+          },
+          {
+            "size": 1430,
+            "capacity": 25000,
+            "seen": 1430
+          },
+          {
+            "size": 2465,
+            "capacity": 25000,
+            "seen": 2465
+          },
+          {
+            "size": 5394,
+            "capacity": 25000,
+            "seen": 5394
+          }
+        ],
+        "losses": {
+          "advantage_0": 0.2503598928451538,
+          "advantage_1": 0.6069087982177734,
+          "average_0": 0.13351322710514069,
+          "average_1": 0.08966395258903503
+        }
+      },
+      "exploitability_bb": 0.2477845933752465,
+      "views": {
+        "root": {
+          "coverage": 1.0,
+          "prediction_coverage": 1.0,
+          "training": {
+            "hands": 2,
+            "counts": {
+              "unseen": 0,
+              "average_only": 0,
+              "regret_only": 0,
+              "low_samples": 0,
+              "sampled": 2
+            },
+            "mass": {
+              "unseen": 0.0,
+              "average_only": 0.0,
+              "regret_only": 0.0,
+              "low_samples": 0.0,
+              "sampled": 1.0
+            },
+            "regret_updates": {
+              "min": 622,
+              "median": 640.0,
+              "p90": 622,
+              "max": 658,
+              "total": 1280
+            },
+            "average_samples": {
+              "min": 539,
+              "median": 576.0,
+              "p90": 539,
+              "max": 613,
+              "total": 1152
+            },
+            "sample_threshold": 200,
+            "notice": "Sample counts are not a convergence or exploitability certificate."
+          },
+          "aggregate": [
+            0.23543880879878998,
+            0.2320660501718521,
+            0.25692255795001984,
+            0.2755725607275963
+          ]
+        }
+      }
+    },
+    {
+      "backend": "deep_cfr",
+      "device": "mps",
+      "seed": 23,
+      "settings": {
+        "sizes": [
+          [
+            0.33,
+            0.75
+          ],
+          [
+            0.5,
+            1.0
+          ],
+          [
+            0.75,
+            1.25
+          ]
+        ],
+        "raise_multiplier": 3.0,
+        "max_raises": 1,
+        "include_all_in": true,
+        "buckets": 8,
+        "equity_samples": 24,
+        "mode": "exact",
+        "chance_mode": "sampled",
+        "seed": 23,
+        "max_nodes": null,
+        "backend": "deep_cfr",
+        "deep_device": "mps",
+        "deep_hidden": 128,
+        "deep_buffer_size": 25000,
+        "deep_traversals": 128,
+        "deep_train_steps": 256,
+        "deep_batch_size": 256,
+        "deep_inference_batch": 32
+      },
+      "initial_exploitability_bb": 0.96875,
+      "stats": {
+        "status": "complete",
+        "iterations": 3,
+        "target": null,
+        "nodes": 24,
+        "seconds": 15.0,
+        "run_seconds": 15.0,
+        "time_limit_seconds": 15.0,
+        "mode": "exact",
+        "exploitability": null,
+        "attempted_iterations": 4,
+        "completed_traversals": [
+          512,
+          384
+        ],
+        "interrupted_iterations": 0,
+        "partial_updates_possible": false,
+        "tree_visits": 8186,
+        "max_nodes": null,
+        "chance_mode": "sampled",
+        "enumerated_turns": 0,
+        "policy_update": "alternating_deep_cfr",
+        "backend": "deep_cfr",
+        "device": "mps",
+        "iteration_unit": "neural rounds",
+        "phase": "advantage_0",
+        "phase_step": 97,
+        "phase_total": 256,
+        "pending_round": true,
+        "prediction_ready": true,
+        "tracking_limit": 50000,
+        "tracking_saturated": false,
+        "replay_capacity_bytes": 230500000,
+        "replay": [
+          {
+            "size": 915,
+            "capacity": 25000,
+            "seen": 915
+          },
+          {
+            "size": 542,
+            "capacity": 25000,
+            "seen": 542
+          },
+          {
+            "size": 834,
+            "capacity": 25000,
+            "seen": 834
+          },
+          {
+            "size": 2111,
+            "capacity": 25000,
+            "seen": 2111
+          }
+        ],
+        "losses": {
+          "advantage_0": 0.30895093083381653,
+          "advantage_1": 0.688781201839447,
+          "average_0": 0.10947932302951813,
+          "average_1": 0.2311781346797943
+        }
+      },
+      "exploitability_bb": 0.34284499172370797,
+      "views": {
+        "root": {
+          "coverage": 1.0,
+          "prediction_coverage": 1.0,
+          "training": {
+            "hands": 2,
+            "counts": {
+              "unseen": 0,
+              "average_only": 0,
+              "regret_only": 0,
+              "low_samples": 2,
+              "sampled": 0
+            },
+            "mass": {
+              "unseen": 0.0,
+              "average_only": 0.0,
+              "regret_only": 0.0,
+              "low_samples": 1.0,
+              "sampled": 0.0
+            },
+            "regret_updates": {
+              "min": 244,
+              "median": 256.0,
+              "p90": 244,
+              "max": 268,
+              "total": 512
+            },
+            "average_samples": {
+              "min": 189,
+              "median": 192.0,
+              "p90": 189,
+              "max": 195,
+              "total": 384
+            },
+            "sample_threshold": 200,
+            "notice": "Sample counts are not a convergence or exploitability certificate."
+          },
+          "aggregate": [
+            0.3021015375852585,
+            0.13778400979936123,
+            0.24445973336696625,
+            0.3156547397375107
+          ]
+        }
+      }
+    }
+  ],
+  "notice": "Small diagnostic game only; these results do not establish full-game strength.",
+  "torch_version": "2.14.1",
+  "mps_available": true,
+  "hardware": "Apple M1 Pro, 16 GB unified memory (user supplied)",
+  "measurement_date": "2026-10-20",
+  "interpretation": "Short validation runs on a four-hand-pair river fixture. Tabular CFR is much stronger here; no large-game or unseen-state quality claim. CPU completed more neural rounds than MPS at these settings."
+}

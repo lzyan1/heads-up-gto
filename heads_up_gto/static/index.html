@@ -40,17 +40,26 @@
 <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
   <div class="dialog-heading"><div><span class="eyebrow">WORKSPACE</span><h2 id="settings-title">Study settings</h2></div><button id="settings-close" class="icon-button" aria-label="Close settings">×</button></div>
   <form id="settings-form">
+    <label for="backend">Training method</label><select id="backend"><option value="tabular">Tabular MCCFR</option><option value="deep_cfr">Deep CFR · turn/river pilot</option></select>
+    <p id="deep-help" class="hint" hidden>First navigate an existing tabular solve to a turn or river decision. Then choose Deep CFR and use Refine decision. Neural predictions can cover unseen hands; they are not verified GTO frequencies.</p>
     <div class="two">
       <div><label for="stop-mode">Stop after</label><select id="stop-mode"><option value="iterations">Number of iterations</option><option value="time">Time limit</option></select></div>
       <div id="iteration-field"><label for="iterations">Iterations per run</label><input id="iterations" type="number" min="10" step="1" value="2000" required></div>
       <div id="time-field" hidden><label for="time-limit">Time limit (seconds)</label><input id="time-limit" type="number" min="0.1" step="any" value="60" disabled required></div>
     </div>
-    <p class="hint">Applies to the next solve, refinement or Train more. Each timed run gets a fresh time limit and finishes its current iteration before stopping. You can stop early at any time.</p>
+    <p class="hint">Applies to the next solve, refinement or Train more. Tabular training finishes its current iteration. Deep CFR pauses between batches and resumes the same round; predictions update after a full round. Each timed run gets a fresh budget.</p>
     <label for="mode">Card model</label><select id="mode"><option value="bucketed">Strength buckets</option><option value="exact">Exact cards</option></select>
     <p class="hint" id="card-model-help">Hands in the same strength bucket share a strategy.</p>
     <label for="chance-mode">Board sampling</label><select id="chance-mode"><option value="sampled">Sample turn and river</option><option value="enumerate_turns">Enumerate every turn · experimental</option></select>
     <p class="hint">Turn enumeration uses exact hands and one sampled river per legal turn. Each iteration costs more. Turn/river refinements use normal sampling.</p>
     <details><summary>Training · advanced settings</summary>
+      <div id="deep-settings" hidden>
+        <div class="two"><div><label for="deep-device">Neural computation</label><select id="deep-device"><option value="cpu">CPU · default</option><option value="mps">Apple GPU · MPS</option></select></div><div><label for="deep-hidden">Network width</label><select id="deep-hidden"><option value="64">64</option><option value="128" selected>128</option><option value="256">256</option></select></div></div>
+        <div class="two"><div><label for="deep-buffer-size">Samples per buffer</label><input id="deep-buffer-size" type="number" min="128" max="100000" step="1" value="25000" required></div><div><label for="deep-traversals">Deals per player per round</label><input id="deep-traversals" type="number" min="1" max="4096" step="1" value="128" required></div></div>
+        <div class="two"><div><label for="deep-train-steps">Training steps per fit</label><input id="deep-train-steps" type="number" min="1" max="4096" step="1" value="256" required></div><div><label for="deep-batch-size">Training batch size</label><input id="deep-batch-size" type="number" min="16" max="2048" step="1" value="256" required></div></div>
+        <label for="deep-inference-batch">Concurrent traversals</label><input id="deep-inference-batch" type="number" min="1" max="128" step="1" value="32" required>
+        <p class="hint">Defaults reserve about 220 MiB across four sample buffers, plus networks and working memory. CPU and Apple GPU performance depend on the scenario. One neural round includes sampling and four network fits; its count is not comparable to tabular iterations.</p>
+      </div>
       <div id="bucket-settings" class="two"><div><label for="buckets">Strength buckets</label><input id="buckets" type="number" min="4" max="32" step="1" value="8" required></div><div><label for="samples">Equity samples</label><input id="samples" type="number" min="8" max="256" step="1" value="24" required></div></div>
       <div class="two"><div><label for="seed">Random seed</label><input id="seed" type="number" min="0" max="2147483647" step="1" value="7" required></div><div><label for="max-nodes">Decision limit (optional)</label><input id="max-nodes" type="number" min="1" step="1" placeholder="Unlimited"></div></div>
       <p class="hint">Leave the decision limit blank for no cap. Reaching a chosen limit keeps partial results; increase or clear it to train more.</p>

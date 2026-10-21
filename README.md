@@ -6,7 +6,8 @@ A local Python application for 100 BB heads-up no-limit hold'em: use the hardcod
 
 ## Run
 
-Requires Python 3.11+. No runtime dependencies or internet connection are needed.
+Requires Python 3.11+. The tabular backend has no runtime dependencies and works offline.
+Deep CFR is optional; install its dependencies once with `.venv/bin/python -m pip install '.[deep]'`.
 
 ```sh
 .venv/bin/python run.py --open
@@ -28,7 +29,7 @@ Or double-click `run.command` on macOS. The interface is at http://127.0.0.1:800
 
 The cards use `s` ♠, `h` ♥, `d` ♦, and `c` ♣. All recommendations are for the **player currently to act**, not a fixed hero seat. Raises are total amounts in BB. For example, `raise:2.5 / raise:11.5 / call` means SB raises to 2.5, BB raises to 11.5, and SB calls.
 
-“Trained” coverage means the fraction of compatible range mass with average-strategy samples, not convergence. Combo tooltips include training counts. Missing chart frequencies and untrained postflop decisions have no invented recommendation. Action averages exclude unknown mass. Neither navigating the new interface nor adding training turns the prototype into a certified GTO solver.
+For tabular training, coverage means the fraction of compatible range mass with both regret updates and average-strategy samples, not convergence. Combo tooltips include training counts. Missing chart frequencies and untrained tabular decisions have no invented recommendation. Tabular action averages exclude unknown mass. Deep CFR displays model predictions separately from directly sampled coverage; its action averages include predicted unseen hands. Neither backend is a certified GTO solver.
 
 ## Postflop action abstraction
 
@@ -250,3 +251,149 @@ the legacy update order. Its near-pure frequency counts compare current regret
 matching with the displayed historical average; a more nearly pure current
 strategy is not automatically a better strategy. Mixed averages alone do not
 prove that a solver is wrong.
+
+## Deep CFR pilot for a 16 GB Apple Silicon Mac
+
+The optional `deep_cfr` backend learns across exact-card states instead of allocating
+an independent regret table for every combination. It is deliberately limited to a
+**fixed turn or river root with fixed input ranges**. It retains the existing action
+menu; it does not solve unrestricted no-limit Hold'em or certify unseen predictions.
+The tabular backend remains the default.
+
+### Install and use
+
+```sh
+python3 -m venv .venv                 # only if this checkout has no environment
+.venv/bin/python -m pip install '.[deep]'
+.venv/bin/python run.py --open
+```
+
+1. Start a normal tabular flop solve and navigate to a turn or river decision.
+2. In **Settings → Training method**, select **Deep CFR · turn/river pilot**.
+   Selecting it switches the budget control to a time limit. Save settings.
+3. Choose **Refine decision**. The model is specific to that root and the ranges
+   inherited from the earlier solve. Poorly trained earlier ranges remain a source
+   of error; uniform range propagation is disclosed. This is not safe subgame solving.
+4. Use **Train more** to continue. Stop and timed budgets pause between traversal
+   batches or optimizer steps, including in the middle of a round. The unfinished
+   round resumes in place with its RNGs, buffers, models and optimizer intact.
+   The first prediction appears after one complete round; later pauses keep the
+   last completed average strategy available. The budget can overrun by the
+   current batch/step, plus device initialization. It does not wait for a whole round.
+5. The range grid shows **predicted average strategies**, including unseen hands.
+   **Direct samples** is a separate compatible-range-mass measure requiring both
+   advantage and strategy visits. Neither prediction availability nor visit counts
+   measure accuracy. Once the 50,000-state visit tracker fills, counts/coverage are
+   lower bounds. Replay sampling and neural learning continue normally.
+
+A neural round includes `deep_traversals` deals for **each** player, two advantage
+fits and two average-policy fits. Its count is not comparable to tabular iterations.
+Compare quality at equal elapsed time. Changing neural settings requires a new
+refinement; Train more keeps the existing architecture and buffers. Models live
+in memory, like the tabular solver: JSON export records the displayed strategy
+and configuration, not a resumable neural checkpoint. Restarting loses training.
+
+### Memory and device defaults
+
+| Setting | Default | Purpose |
+| --- | ---: | --- |
+| `backend` | `tabular` | Select `deep_cfr` explicitly |
+| `deep_device` | `cpu` | Or `mps` for Apple's GPU; unavailable MPS gives a clear error |
+| `deep_hidden` | 128 | Two fully connected hidden layers |
+| `deep_buffer_size` | 25,000 | Capacity of each of four uniform reservoirs |
+| `deep_traversals` | 128 | Independent sampled deals per player per neural round |
+| `deep_train_steps` | 256 | Minibatch optimizer steps per network fit |
+| `deep_batch_size` | 256 | Training examples per optimizer step |
+| `deep_inference_batch` | 32 | Concurrent traversals whose predictions are batched |
+
+The four default replay arrays reserve **230,500,000 bytes (about 220 MiB)** total.
+They store float32 features/targets/round weights and Boolean action masks. This
+is not total process memory: PyTorch, optimizer states, card-evaluator cache,
+visit tracking, retained solves and the OS also use memory. Replay size is capped
+at 100,000 entries per buffer, network width at 256, and diagnostic state tracking
+at 50,000 entries. GPU and CPU share the Mac's physical RAM. The app retains up to
+two solves, so retaining two neural solves doubles their replay allocation.
+
+CPU is a conservative default for these small networks, not a claim it is always
+faster. Training temporarily uses at most two CPU threads. MPS batches both
+traversal inference and network training; range inspection also batches predictions.
+This does not move Python game simulation onto the GPU. Benchmark both devices
+on the same scenario before choosing one. No cloud service or external bot is used.
+
+### Algorithm and representation
+
+- Independent external-sampling traversals enumerate the traverser's actions and
+  sample the opponent's actions. Player updates alternate; a phase's policies
+  remain fixed while all its samples are collected. Private deals are fresh for
+  the next player's phase, avoiding the shared-deal update-order bias.
+- Each player has an advantage reservoir and a separate strategy reservoir.
+  Algorithm R gives every observed sample equal retention probability, including
+  after capacity is reached. It is not a recent-samples sliding window.
+- Stored advantage targets are sampled action value minus policy value, normalized
+  by a **fixed root payoff scale**. Models are trained from scratch on accumulated
+  reservoir data at each fit, using Adam, masked squared error, gradient clipping
+  and linear CFR iteration weights `2 * sample_round / current_round`.
+- Regret matching normalizes positive predicted advantages; if none are positive,
+  it selects the largest predicted advantage (uniformly across ties). Round one
+  starts uniformly. Illegal/padded actions are excluded from policies and losses.
+- Strategy targets are recorded at sampled **opponent** nodes. Their visitation
+  already accounts for the owner's reach; no extra reach factor is applied. Two
+  separate softmax networks approximate the weighted average strategy. The final
+  policy is not the latest advantage network. Average models publish together only
+  after a complete round. An error retains the prior published policy but requires
+  a new refinement to train again.
+- The 569 input features contain exact hole cards, unordered flop cards, separately
+  ordered turn/river cards, rank/suit counts, public stacks/pot/commitments, position,
+  street, public aggressor history, sizing profile, the full local action history,
+  and the current action menu/sizes. Opponent hole cards and undealt cards never
+  enter the encoder. Hand-strength bucketing is not used.
+- Root ranges and prior local-refinement history are fixed context, not portable
+  model inputs. Do not reuse a fitted model for different roots/ranges. Histories
+  longer than 32 public tokens or menus larger than five actions fail explicitly
+  rather than silently truncating information.
+
+This implements the external-sampling, reservoir and average-policy structure of
+[Deep CFR (Brown et al., ICML 2019)](https://proceedings.mlr.press/v97/brown19b.html)
+with a much smaller model and training budget, separate average models per player,
+and an incremental pause/resume scheduler. It is a research prototype, not a
+reproduction of the paper's large-game performance. Function approximation can
+introduce persistent error. A network can output plausible but poor strategies
+in whole branches with little training data.
+
+### Validate and compare
+
+```sh
+.venv/bin/python -m unittest discover -s tests -q
+node --test tests/test_ui.mjs
+PYTHONPATH=. .venv/bin/python benchmarks/deep_cfr.py --seconds 30 --seeds 7 23 --devices cpu mps --output deep-cfr-results.json
+PYTHONPATH=. .venv/bin/python benchmarks/deep_cfr.py --street turn --seconds 30 --devices cpu --output deep-cfr-turn-results.json
+```
+
+Run performance comparisons without other training jobs. The benchmark gives each
+backend the same training-time budget and records version/device,
+completed rounds/traversals, memory allocation, and direct versus predicted coverage.
+On its small river fixture it computes exact best-response exploitability for the
+**average policy**, before and after training. Turn runs report no exploitability
+estimate. A short neural run with no completed round is reported as unready; it
+must not be treated as a trained strategy. Tests cover uniform replay retention,
+legal-action masking, iteration weights, observation encoding, unseen-state
+prediction labeling, exact resume equivalence, API refinement/export, dependency-free
+fallback, and measured improvement in the small river fixture. They do not establish
+full Hold'em convergence or that Deep CFR beats tabular CFR at a fixed runtime.
+
+### Recorded short-run validation
+
+[Raw results](benchmarks/results/deep-cfr-river-m1-pro.json) record two seeds on an
+M1 Pro with 16 GB RAM, using 15 seconds per run and the defaults above. Initial
+exploitability was 0.96875 BB in this four-hand-pair river fixture.
+
+| Backend | Seed 7 exploitability (BB) | Seed 23 exploitability (BB) | Completed neural rounds |
+| --- | ---: | ---: | --- |
+| Tabular | 0.0102 | 0.0102 | Not applicable |
+| Deep CFR, CPU | 0.2265 | 0.2478 | 7 / 9 |
+| Deep CFR, MPS | 0.4778 | 0.3428 | 2 / 3 |
+
+CPU is the default based on this small-network comparison. Tabular CFR wins this
+tiny game decisively; the test verifies that the neural implementation learns,
+not that it is a replacement for tabular solving in small games. These brief
+measurements do not evaluate unseen-branch accuracy or full-game playing strength.

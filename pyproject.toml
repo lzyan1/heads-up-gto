@@ -9,8 +9,14 @@ description = "Local, experimental heads-up postflop MCCFR study tool"
 requires-python = ">=3.11"
 dependencies = []
 
+[project.optional-dependencies]
+deep = ["numpy>=1.26,<3", "torch>=2.6,<3"]
+
 [project.scripts]
 heads-up-gto = "heads_up_gto.server:main"
 
 [tool.setuptools.package-data]
 heads_up_gto = ["static/*"]
+
+[tool.setuptools.packages.find]
+include = ["heads_up_gto*"]

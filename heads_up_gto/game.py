@@ -19,6 +19,14 @@ class Settings:
     chance_mode: str = "sampled"  # or enumerate_turns (exact cards only)
     seed: int = 7
     max_nodes: int | None = None  # unlimited unless an optional limit is chosen
+    backend: str = "tabular"
+    deep_device: str = "cpu"
+    deep_hidden: int = 128
+    deep_buffer_size: int = 25000  # per reservoir: two advantage + two strategy
+    deep_traversals: int = 128  # per player, per neural CFR round
+    deep_train_steps: int = 256  # per network fit
+    deep_batch_size: int = 256
+    deep_inference_batch: int = 32
 
     @classmethod
     def from_dict(cls, data):
@@ -31,6 +39,20 @@ class Settings:
         if "sizes" in data:
             data["sizes"] = tuple(tuple(sorted(set(float(x) for x in row))) for row in data["sizes"])
         obj = cls(**data)
+        if obj.backend not in ("tabular", "deep_cfr"):
+            raise ValueError("Backend must be tabular or deep_cfr.")
+        if obj.deep_device not in ("cpu", "mps"):
+            raise ValueError("Deep CFR device must be cpu or mps.")
+        for name, lo, hi in (("deep_hidden", 32, 256), ("deep_buffer_size", 128, 100000),
+                             ("deep_traversals", 1, 4096), ("deep_train_steps", 1, 4096),
+                             ("deep_batch_size", 16, 2048), ("deep_inference_batch", 1, 128)):
+            if type(getattr(obj, name)) is not int or not lo <= getattr(obj, name) <= hi:
+                raise ValueError(f"{name} must be an integer between {lo} and {hi}.")
+        if obj.backend == "deep_cfr":
+            if obj.mode != "exact" or obj.chance_mode != "sampled":
+                raise ValueError("Deep CFR uses exact card inputs and sampled boards.")
+            if obj.max_nodes is not None:
+                raise ValueError("Deep CFR uses bounded replay buffers; leave the decision limit blank.")
         if len(obj.sizes) != 3 or any(len(row) > 3 or any(not math.isfinite(x) or not .1 <= x <= 3 for x in row) for row in obj.sizes):
             raise ValueError("Give up to three pot fractions per street, each between 0.1 and 3.")
         if obj.chance_mode not in ("sampled", "enumerate_turns"):

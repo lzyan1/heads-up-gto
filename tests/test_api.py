@@ -1,4 +1,5 @@
 import json
+import importlib.util
 import threading
 import time
 import unittest
@@ -39,6 +40,35 @@ class APITests(unittest.TestCase):
         with urlopen(self.base) as response:
             self.assertIn(b'Solve continuation',response.read())
             self.assertIn("frame-ancestors 'none'",response.headers['Content-Security-Policy'])
+
+    @unittest.skipUnless(all(importlib.util.find_spec(x) is not None for x in ('torch', 'numpy')), 'Install .[deep]')
+    def test_neural_refinement_resume_and_export(self):
+        initial = {'flop': 'As Kd 7c', 'preflop': 'raise:2.5/raise:11.5/raise:26/call',
+                   'iterations': 10, 'settings': {'mode': 'exact'}}
+        parent = self.wait(self.request('/api/solve', initial))
+        settings = {'backend': 'deep_cfr', 'mode': 'exact', 'deep_hidden': 32,
+                    'deep_buffer_size': 128, 'deep_traversals': 2, 'deep_train_steps': 2,
+                    'deep_batch_size': 16, 'deep_inference_batch': 2}
+        with self.assertRaises(HTTPError) as error:
+            self.request('/api/solve', {**initial, 'settings': settings})
+        self.assertEqual(error.exception.code, 400)
+        self.assertIn('turn or river', error.exception.read().decode())
+        error.exception.close()
+        path = ['check', 'check', 'deal:2h', 'check', 'check', 'deal:3d']
+        refined = self.wait(self.request(f"/api/jobs/{parent['id']}/refine",
+                                        {'path': path, 'settings': settings, 'iterations': 10}))
+        self.assertEqual(refined['stats']['backend'], 'deep_cfr')
+        self.assertTrue(refined['stats']['prediction_ready'])
+        self.assertTrue(refined['metadata']['local_refinement'])
+        view = self.request(f"/api/jobs/{refined['id']}/node", {'path': []})
+        self.assertAlmostEqual(view['prediction_coverage'], 1)
+        self.assertLess(view['coverage'], view['prediction_coverage'])
+        self.assertAlmostEqual(sum(view['aggregate']), 1, places=6)
+        resumed = self.wait(self.request(f"/api/jobs/{refined['id']}/resume", {'iterations': 10}))
+        self.assertEqual(resumed['stats']['iterations'], 20)
+        exported = self.request(f"/api/jobs/{refined['id']}/export", {'path': []})
+        self.assertEqual(exported['metadata']['settings']['backend'], 'deep_cfr')
+        self.assertTrue(exported['node']['neural']['predictions'])
 
     def test_cross_origin_rejected(self):
         with self.assertRaises(HTTPError) as error:self.request('/api/solve',{},'https://example.com')

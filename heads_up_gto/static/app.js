@@ -5,6 +5,7 @@ const pct = n => `${(100*n).toFixed(1)}%`;
 const suitColors = {s:'#555b61',h:'#bb282d',d:'#334fd3',c:'#258c48'};
 const suitNames = {s:'spades',h:'hearts',d:'diamonds',c:'clubs'};
 const player = actor => actor===0?'BB':'SB';
+const deepFields = [['deep-device','deep_device'],['deep-hidden','deep_hidden'],['deep-buffer-size','deep_buffer_size'],['deep-traversals','deep_traversals'],['deep-train-steps','deep_train_steps'],['deep-batch-size','deep_batch_size'],['deep-inference-batch','deep_inference_batch']];
 let config=null, prePath=[], preEnd=null, node=null, phase='preflop';
 let ctx=null, contexts=new Map(), loading=false, pollTimer=null, view='strategy', pinned=null, hovered=null, groups=new Map(), picker=null;
 const locked = () => loading || !!ctx?.job.busy;
@@ -27,24 +28,34 @@ function cards(cards){const e=el('div','board');cards.forEach(c=>e.append(card(c
 function shortAction(a){return a.label.replace(/ BB.*/,'').replace('Raise to','Raise');}
 function readConfig(){
   return {...trainingLimit($('stop-mode').value,Number($('iterations').value),Number($('time-limit').value)),settings:{
+    backend:$('backend').value,
+    ...Object.fromEntries(deepFields.map(([id,key])=>[key,id==='deep-device'?$(id).value:Number($(id).value)])),
     mode:$('mode').value,chance_mode:$('chance-mode').value,buckets:Number($('buckets').value),equity_samples:Number($('samples').value),seed:Number($('seed').value),
     max_nodes:$('max-nodes').value.trim()===''?null:Number($('max-nodes').value)
   }};
 }
 function updateSettingsFields(){
+  const deep=$('backend').value==='deep_cfr';
+  if(deep){$('mode').value='exact';$('chance-mode').value='sampled';$('max-nodes').value='';}
+  $('deep-help').hidden=!deep;$('deep-settings').hidden=!deep;
+  for(const [id] of deepFields)$(id).disabled=!deep;
+  $('chance-mode').disabled=deep;$('max-nodes').disabled=deep;
+  document.querySelector('label[for="iterations"]').textContent=deep?'Neural rounds per run':'Iterations per run';
   const enumerated=$('chance-mode').value==='enumerate_turns';
   if(enumerated)$('mode').value='exact';
-  $('mode').disabled=enumerated;
+  $('mode').disabled=enumerated||deep;
   const timed=$('stop-mode').value==='time',exact=$('mode').value==='exact';
   $('iteration-field').hidden=timed;$('iterations').disabled=timed;$('time-field').hidden=!timed;$('time-limit').disabled=!timed;
   $('bucket-settings').hidden=exact;$('buckets').disabled=exact;$('samples').disabled=exact;
-  $('card-model-help').textContent=exact?'Tracks each card combination separately. Exact cards still require training to converge.':'Hands in the same strength bucket share a strategy.';
+  $('card-model-help').textContent=deep?'Learns from exact cards and betting history to predict strategies for related states.':exact?'Tracks each card combination separately. Exact cards still require training to converge.':'Hands in the same strength bucket share a strategy.';
 }
 function restoreSettings(){
   const timed=config.time_limit_seconds!==undefined;
   $('stop-mode').value=timed?'time':'iterations';
   $(timed?'time-limit':'iterations').value=timed?config.time_limit_seconds:config.iterations;
   for(const [id,key] of [['chance-mode','chance_mode'],['mode','mode'],['buckets','buckets'],['samples','equity_samples'],['seed','seed'],['max-nodes','max_nodes']])$(id).value=config.settings[key]??'';
+  $('backend').value=config.settings.backend||'tabular';
+  for(const [id,key] of deepFields)if(config.settings[key]!==undefined)$(id).value=config.settings[key];
   updateSettingsFields();
 }
 
@@ -108,11 +119,13 @@ function controls(){
   $('refine').hidden=!hasSolve||busy||!node||!!node.pending||!!node.terminal;$('refine').disabled=loading;
   $('export').hidden=!hasSolve||busy||!node;$('export').disabled=loading;
   if(busy){const s=ctx.job.stats,timed=s.time_limit_seconds!=null;
-    $('study-status').textContent=timed?`Solving · ${fmt(s.run_seconds||0)} / ${fmt(s.time_limit_seconds)}s · ${fmt(s.iterations||0)} iterations`:`Solving · ${fmt(s.iterations||0)} / ${fmt(s.target||0)} iterations`;
+    const unit=s.backend==='deep_cfr'?'neural rounds':'iterations';
+    const phaseLabel={sampling_0:'Sampling BB',sampling_1:'Sampling SB',advantage_0:'Fitting BB advantages',advantage_1:'Fitting SB advantages',average_0:'Fitting BB average',average_1:'Fitting SB average'}[s.phase];
+    $('study-status').textContent=(timed?`Solving · ${fmt(s.run_seconds||0)} / ${fmt(s.time_limit_seconds)}s · ${fmt(s.iterations||0)} ${unit}`:`Solving · ${fmt(s.iterations||0)} / ${fmt(s.target||0)} ${unit}`)+(phaseLabel?` · ${phaseLabel} ${s.phase_step}/${s.phase_total}`:'');
     $('progress').style.width=`${Math.min(100,100*(timed?(s.run_seconds||0)/s.time_limit_seconds:(s.iterations||0)/(s.target||1)))}%`;
   }else{$('progress').style.width='0';const s=ctx?.job.stats;
     const suffix=s?.status==='cancelled'?' · stopped':s?.status==='memory_exhausted'?' · RAM full · partial results saved':s?.status==='node_limit'?' · decision limit reached':s?.status==='complete'&&s.time_limit_seconds!=null?' · time limit reached':'';
-    $('study-status').textContent=loading?'Loading decision…':hasSolve?`${fmt(s.iterations||0)} iterations · ${fmt(s.seconds||0)}s${suffix}`:'GTO Wizard · hardcoded preflop';
+    $('study-status').textContent=loading?'Loading decision…':hasSolve?`${fmt(s.iterations||0)} ${s.backend==='deep_cfr'?'neural rounds':'iterations'} · ${fmt(s.seconds||0)}s${suffix}${s.pending_round?' · round paused; Train more to continue':''}`:'GTO Wizard · hardcoded preflop';
   }
 }
 function addDecision(panel,jobId){
@@ -193,9 +206,9 @@ function renderHand(name){
     else{
       display.forEach(a=>{const row=el('div','combo-frequency');row.append(el('span','',shortAction(a)),el('b','',pct(r.probabilities[a.index])));box.append(row);});
       const bar=el('div','combo-bar');bar.style.background=actionGradient(r.probabilities,display);box.append(bar);
-      if(r.updates!==null){box.title=`${fmt(r.updates)} regret updates · ${fmt(r.averages)} average samples${r.updates<200||r.averages<200?' · limited training':''}`;}
+      if(r.updates!==null){box.title=`${node?.neural?'Neural prediction · ':''}${fmt(r.updates)} ${node?.neural?'advantage samples':'regret updates'} · ${fmt(r.averages)} average samples${r.updates<200||r.averages<200?' · limited direct sampling':''}`;}
     }
-    if(phase==='postflop'&&r)box.append(el('div','combo-unavailable',`${fmt(r.updates)} regret updates · ${fmt(r.averages)} average samples`));
+    if(phase==='postflop'&&r)box.append(el('div','combo-unavailable',`${node?.neural?'Prediction · ':''}${fmt(r.updates)} ${node?.neural?'advantage samples':'regret updates'} · ${fmt(r.averages)} average samples`));
     grid.append(box);
   }
 }
@@ -213,7 +226,7 @@ function renderActions(){
     $('action-list').append(b);
   }
   $('action-bar').style.background=actionGradient(node?.aggregate||[],display);
-  $('action-hint').textContent=node?.coverage>0&&node.coverage<.999?'Averages of trained hands':'Click to continue';
+  $('action-hint').textContent=node?.neural?'Predicted average strategy':node?.coverage>0&&node.coverage<.999?'Averages of trained hands':'Click to continue';
   if(!current.length){
     const box=$('decision-message');box.hidden=false;box.replaceChildren();$('action-bar').hidden=true;
     if(ctx?.job.busy){box.append(el('strong','','Solving the continuation…'),el('span','','Your board and ranges are being trained across the remaining streets. You can stop early to explore the partial result.'));}
@@ -232,17 +245,22 @@ function render(scroll=false){
   $('bb-badge').classList.toggle('to-act',!!n?.actions.length&&n.actor===0);$('sb-badge').classList.toggle('to-act',!!n?.actions.length&&n.actor===1);
   $('range-player').textContent=n?.actions.length?`${player(n.actor)} to act`:'Range';
   $('range-caption').textContent=view==='breakdown'?'Bar height = reach · color = action':view==='ranges'?'Bar height = range reach':'Conditional action frequencies';
-  $('coverage').textContent=n?.phase==='postflop'&&n.actions.length?`${pct(n.coverage)} with samples`:n?.actions.length&&!n.manual?(n.coverage<.999?`${pct(n.coverage)} chart coverage`:'Chart strategy'):'';
+  $('coverage').textContent=n?.phase==='postflop'&&n.actions.length?`${pct(n.coverage)} ${n.neural?'direct samples':'with samples'}`:n?.actions.length&&!n.manual?(n.coverage<.999?`${pct(n.coverage)} chart coverage`:'Chart strategy'):'';
   $('source-label').textContent='GTO Wizard · hardcoded preflop';
   let note=phase==='preflop'?'Preflop frequencies are rounded to 10%. SB’s 4-bet jam and BB’s 5-bet jam are allowed. Opening and 3-bet jams are disabled.':'One scenario bet or raise size, plus all-in whenever legal. Heuristic sizes; approximate strategy, not a GTO certificate.';
   if(phase==='postflop'&&ctx?.job.metadata.settings.chance_mode==='enumerate_turns')note+=' Experimental turn enumeration: all legal turns per sampled hand pair, one sampled river each; private hands and opponent actions still sampled.';
   if(phase==='postflop'&&n?.sizing)note+=` ${n.sizing.reason}`;
   if(phase==='preflop'&&n?.actions.length&&!n.manual&&n.coverage<.999)note+=' This chart omits some frequencies; averages include only hands with a complete mix.';
   if(phase==='postflop'&&ctx?.job.metadata.settings.mode==='bucketed')note+=' Hands in the same strength bucket share frequencies.';
-  if(n?.coverage<.999&&phase==='postflop'&&n.actions.length)note+=' Action totals include only hands with both regret updates and average samples. Refine this decision to train this board directly.';
+  if(n?.coverage<.999&&phase==='postflop'&&n.actions.length&&!n.neural)note+=' Action totals include only hands with both regret updates and average samples. Refine this decision to train this board directly.';
+  if(n?.neural){
+    note+=` Deep CFR: ${pct(n.prediction_coverage)} of range mass has neural predictions. Action totals include predicted unseen hands. Direct sample coverage is separate and does not measure prediction accuracy.`;
+    if(!ctx?.job.stats.prediction_ready)note+=' No complete neural round yet; choose Train more to finish the first average strategy.';
+    if(n.neural.tracking_saturated)note+=' The visit-tracking limit was reached; direct sample counts are lower bounds.';
+  }
   if(phase==='postflop'&&(n?.fallback_used||ctx?.job.metadata.fallback_used))note+=' An untrained earlier decision used a uniform fallback to carry ranges forward.';
   if(ctx?.job.metadata.local_refinement&&phase==='postflop')note+=' This is a local re-solve, without a full-game equilibrium guarantee.';
-  if(phase==='postflop'&&n?.training){
+  if(phase==='postflop'&&n?.training&&!n.neural){
     const t=n.training,c=t.counts;
     note+=` ${c.unseen} unseen hands; ${c.regret_only} regret-only; ${c.average_only} average-only; ${c.low_samples} with fewer than ${t.sample_threshold} of either sample. Median regret updates / average samples: ${fmt(t.regret_updates.median)} / ${fmt(t.average_samples.median)}. Counts do not certify convergence.`;
   }
@@ -289,6 +307,7 @@ $('new-hand').onclick=()=>task(()=>resetHand());
 $('settings-open').onclick=()=>{restoreSettings();$('settings-error').hidden=true;$('settings-dialog').showModal();};
 $('settings-close').onclick=()=>$('settings-dialog').close();
 $('stop-mode').onchange=updateSettingsFields;$('mode').onchange=updateSettingsFields;$('chance-mode').onchange=updateSettingsFields;
+$('backend').onchange=()=>{if($('backend').value==='deep_cfr')$('stop-mode').value='time';updateSettingsFields();};
 async function validateConfig(candidate){await api('/api/settings/validate',candidate);}
 $('settings-form').onsubmit=e=>{e.preventDefault();task(async()=>{
   const candidate=readConfig();await validateConfig(candidate);
