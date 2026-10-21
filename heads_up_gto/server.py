@@ -19,6 +19,7 @@ from .preflop import chart_ranges, reconstruct
 from .backends import create_solver
 from .screenshot_charts import screenshot_chart
 from .navigation import preflop_view
+from .reference_line import supports_reference, comparison_report
 
 STATIC = Path(__file__).parent / "static"
 JOBS = {}
@@ -72,7 +73,7 @@ def prepare(payload):
     profile = profile_for(preflop.pot, preflop.stacks)
     root = State(preflop.pot, preflop.stacks, board, sizing_profile=profile)
     solver = create_solver(root, ranges, settings)
-    return solver, budget, {"name": name, "is_demo": is_demo, "range_source": "wizard", "sizing_status": dict.fromkeys(("flop", "turn", "river"), "scenario_heuristic"), "sizing": sizing_metadata(profile), "preflop": preflop.history, "combos": [len(r) for r in ranges], "weighted_combos": [round(sum(r.values()), 2) for r in ranges], "pot": root.pot, "stacks": root.stacks, "settings": asdict(settings), "training_budget": budget, "range_approximation": approximation}
+    return solver, budget, {"name": name, "is_demo": is_demo, "range_source": "wizard", "sizing_status": dict.fromkeys(("flop", "turn", "river"), "scenario_heuristic"), "sizing": sizing_metadata(profile), "preflop": preflop.history, "combos": [len(r) for r in ranges], "weighted_combos": [round(sum(r.values()), 2) for r in ranges], "pot": root.pot, "stacks": root.stacks, "settings": asdict(settings), "training_budget": budget, "range_approximation": approximation, "reference_line_available": supports_reference(root)}
 
 
 def run_job(job, budget):
@@ -213,7 +214,7 @@ class Handler(BaseHTTPRequestHandler):
                             raise ValueError("Refine an active decision after dealing the next board card.")
                         settings = app_settings(payload.get("settings", asdict(job["solver"].settings)))
                         solver = create_solver(replace(state, path=()), ranges, settings)
-                        metadata = {**job["metadata"], "pot": state.pot, "stacks": state.stacks, "combos": [len(r) for r in ranges], "local_refinement": True, "parent_path": node_path, "fallback_used": fallback, "settings": asdict(settings), "training_budget": budget}
+                        metadata = {**job["metadata"], "pot": state.pot, "stacks": state.stacks, "combos": [len(r) for r in ranges], "local_refinement": True, "parent_path": node_path, "fallback_used": fallback, "settings": asdict(settings), "training_budget": budget, "reference_line_available": supports_reference(solver.root)}
                         request = {"original": job["request"], "refine_path": node_path}
                         new_job = {"id": uuid.uuid4().hex, "solver": solver, "metadata": metadata, "request": request, "stats": running_stats(solver, budget), "busy": True}
                         if len(JOBS) >= 2:
@@ -225,6 +226,12 @@ class Handler(BaseHTTPRequestHandler):
                     if job["busy"]:
                         return self.send_json({"error": "Stop or finish training before requesting diagnostics."}, 409)
                     return self.send_json({"stats": job["solver"].stats(), "coverage": job["solver"].coverage_diagnostics()})
+                if command == "comparison":
+                    if job["busy"]:
+                        return self.send_json({"error": "Stop or finish training before comparing the line."}, 409)
+                    return self.send_json({**comparison_report(job["solver"]),
+                                           "metadata": job["metadata"], "root_state": asdict(job["solver"].root),
+                                           "root_ranges": [{combo_text(h): w for h, w in r.items()} for r in job["solver"].ranges]})
                 if command in ("node", "export"):
                     if job["busy"]:
                         return self.send_json({"error": "Wait for the solve to finish, or stop it, before exploring."}, 409)

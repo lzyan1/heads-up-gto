@@ -255,9 +255,11 @@ prove that a solver is wrong.
 ## Deep CFR pilot for a 16 GB Apple Silicon Mac
 
 The optional `deep_cfr` backend learns across exact-card states instead of allocating
-an independent regret table for every combination. It is deliberately limited to a
-**fixed turn or river root with fixed input ranges**. It retains the existing action
-menu; it does not solve unrestricted no-limit Hold'em or certify unseen predictions.
+an independent regret table for every combination. It supports a **fixed flop,
+turn or river root with fixed input ranges**. A flop-root solve trains all three
+streets together, sampling private hands, opponent actions and future board cards.
+It retains the existing fixed scenario sizes and all-in menu; it does not solve
+unrestricted no-limit Hold'em or certify unseen predictions.
 The tabular backend remains the default.
 
 ### Install and use
@@ -268,12 +270,17 @@ python3 -m venv .venv                 # only if this checkout has no environment
 .venv/bin/python run.py --open
 ```
 
-1. Start a normal tabular flop solve and navigate to a turn or river decision.
-2. In **Settings → Training method**, select **Deep CFR · turn/river pilot**.
-   Selecting it switches the budget control to a time limit. Save settings.
-3. Choose **Refine decision**. The model is specific to that root and the ranges
-   inherited from the earlier solve. Poorly trained earlier ranges remain a source
-   of error; uniform range propagation is disclosed. This is not safe subgame solving.
+1. In **Settings → Training method**, select **Deep CFR · flop / turn / river**.
+   Selecting it switches the budget control to a time limit. Set your budget and
+   save settings; this does not start training or convert an existing solve.
+2. Start a new hand, follow preflop, and choose the flop. **Solve continuation**
+   starts Deep CFR directly from that flop. Alternatively, enter the preflop line
+   and board under **Load a specific spot**, then choose **Load spot & solve**.
+3. Navigate to any turn/river afterward to inspect the same flop-trained average
+   strategy. No additional solve is needed. **Refine decision** remains available
+   for a separate local solve with inherited ranges, but it is not the original
+   flop model. Poorly trained earlier ranges remain a source of error; uniform
+   propagation is disclosed. Refinement is not safe subgame solving.
 4. Use **Train more** to continue. Stop and timed budgets pause between traversal
    batches or optimizer steps, including in the middle of a round. The unfinished
    round resumes in place with its RNGs, buffers, models and optimizer intact.
@@ -289,9 +296,37 @@ python3 -m venv .venv                 # only if this checkout has no environment
 A neural round includes `deep_traversals` deals for **each** player, two advantage
 fits and two average-policy fits. Its count is not comparable to tabular iterations.
 Compare quality at equal elapsed time. Changing neural settings requires a new
-refinement; Train more keeps the existing architecture and buffers. Models live
+solve or refinement; Train more keeps the existing architecture and buffers. Models live
 in memory, like the tabular solver: JSON export records the displayed strategy
 and configuration, not a resumable neural checkpoint. Restarting loses training.
+
+### Supplied GTO Wizard line
+
+In **Settings → Load a specific spot**, choose **Set up supplied GTO Wizard flop**.
+This fills in Deep CFR, SB raise 2.5 / BB call, and **As Kd 7c** without starting
+training. Choose your time limit, then **Load spot & solve** when ready. The default
+CPU, 128-wide networks and 25,000-entry buffers are unchanged. Longer flop rounds
+may pause before producing a first prediction; **Train more** continues that round.
+
+After stopping or finishing, **Compare line** inspects seven decisions from this
+one flop solve: BB check, SB scenario bet, BB call; deal **2h**; BB check, SB scenario
+bet, BB call; deal **3d**. The inspection runout is never supplied to flop training.
+The panel shows action frequencies, direct sample coverage and both lines' pots
+and remaining stacks. **View** opens each decision's full hand grid. **Export
+comparison** saves all seven combo strategies, settings, starting ranges and the
+reference observations. Comparing does not run training or local refinement.
+
+The existing sizing rules produce the same 1.7 BB flop bet, then **6.3 BB on the
+turn** instead of the screenshot's 16.3 BB. The resulting river pot is **21 BB**
+with **89.5 BB** behind, versus 41 BB and 79.5 BB in the screenshot. The menus also
+differ elsewhere. This is a reference for the same board/action types, not an
+identical-game benchmark: sizes change incentives and reaching ranges.
+
+The screenshot contains no action frequencies. Reference probabilities and
+frequency errors are explicitly `null`; no accuracy score is invented. A numerical
+GTO Wizard comparison needs its frequencies plus matching ranges, rake and action
+tree. The app's preflop frequencies remain rounded to 10%. The report is also
+available at `POST /api/jobs/<id>/comparison` with `{}` for this original flop root.
 
 ### Memory and device defaults
 
@@ -341,7 +376,7 @@ on the same scenario before choosing one. No cloud service or external bot is us
   separate softmax networks approximate the weighted average strategy. The final
   policy is not the latest advantage network. Average models publish together only
   after a complete round. An error retains the prior published policy but requires
-  a new refinement to train again.
+  a new solve or refinement to train again.
 - The 569 input features contain exact hole cards, unordered flop cards, separately
   ordered turn/river cards, rank/suit counts, public stacks/pot/commitments, position,
   street, public aggressor history, sizing profile, the full local action history,
@@ -367,17 +402,19 @@ in whole branches with little training data.
 node --test tests/test_ui.mjs
 PYTHONPATH=. .venv/bin/python benchmarks/deep_cfr.py --seconds 30 --seeds 7 23 --devices cpu mps --output deep-cfr-results.json
 PYTHONPATH=. .venv/bin/python benchmarks/deep_cfr.py --street turn --seconds 30 --devices cpu --output deep-cfr-turn-results.json
+PYTHONPATH=. .venv/bin/python benchmarks/deep_cfr.py --street flop --seconds 30 --devices cpu --output deep-cfr-flop-results.json
 ```
 
 Run performance comparisons without other training jobs. The benchmark gives each
 backend the same training-time budget and records version/device,
 completed rounds/traversals, memory allocation, and direct versus predicted coverage.
 On its small river fixture it computes exact best-response exploitability for the
-**average policy**, before and after training. Turn runs report no exploitability
+**average policy**, before and after training. Flop/turn runs report no exploitability
 estimate. A short neural run with no completed round is reported as unready; it
 must not be treated as a trained strategy. Tests cover uniform replay retention,
 legal-action masking, iteration weights, observation encoding, unseen-state
-prediction labeling, exact resume equivalence, API refinement/export, dependency-free
+prediction labeling, exact resume equivalence, three-street flop traversal,
+read-only reference inspection, API flop initialization/refinement/export, dependency-free
 fallback, and measured improvement in the small river fixture. They do not establish
 full Hold'em convergence or that Deep CFR beats tabular CFR at a fixed runtime.
 

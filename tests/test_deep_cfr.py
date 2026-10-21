@@ -54,17 +54,19 @@ else:
                         dict(chance_mode='enumerate_turns'), dict(max_nodes=10)):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 Settings.from_dict({**base, **changes})
-        with self.assertRaisesRegex(ValueError, 'turn or river'):
-            create_solver(replace(root(), board=root().board[:3], street=0), ranges(), Settings(**base))
+        for state in (replace(root(), pending=True), replace(root(), terminal='showdown'),
+                      replace(root(), street=0), replace(root(), street=-1)):
+            with self.subTest(state=state), self.assertRaisesRegex(ValueError, 'active flop, turn or river'):
+                create_solver(state, ranges(), Settings(**base))
 
 
 @unittest.skipUnless(HAS_DEEP, 'Install .[deep] for neural validation')
 class DeepCFRTests(unittest.TestCase):
-    def solver(self, **kwargs):
+    def solver(self, root_state=None, **kwargs):
         configuration = dict(backend='deep_cfr', mode='exact', deep_hidden=32,
                              deep_buffer_size=256, deep_traversals=8, deep_train_steps=8,
                              deep_batch_size=16, deep_inference_batch=4)
-        return DeepCFRSolver(root(), ranges(), Settings(**{**configuration, **kwargs}))
+        return DeepCFRSolver(root_state or root(), ranges(), Settings(**{**configuration, **kwargs}))
 
     def test_encoder_preserves_visible_information_without_card_order_artifacts(self):
         state, hand = root(), next(iter(ranges()[0]))
@@ -82,6 +84,30 @@ class DeepCFRTests(unittest.TestCase):
         # inputs. Unseen turn/river slots remain empty on a turn-root solve.
         turn = replace(state, street=1, board=state.board[:4])
         self.assertEqual(np.count_nonzero(features(turn)[3 * 69:4 * 69]), 0)
+        flop = replace(state, street=0, board=state.board[:3])
+        self.assertEqual(np.count_nonzero(features(flop)[2 * 69:4 * 69]), 0)
+
+    def test_flop_training_samples_both_later_streets_and_inspects_one_model(self):
+        flop = replace(root(), street=0, board=root().board[:3])
+        solver = self.solver(root_state=flop, sizes=((.5,), (.5,), (.5,)), max_raises=0)
+        # Deals vary beyond the fixed flop; neither inspection runout is locked in.
+        deals = [solver.sample_deal()[1] for _ in range(8)]
+        self.assertTrue(all(board[:3] == flop.board for board in deals))
+        self.assertGreater(len({board[3:] for board in deals}), 1)
+        solver.train(2)
+        memories = solver.advantage_memory + solver.strategy_memory
+        seen_streets = set()
+        for memory in memories:
+            seen_streets.update(np.argmax(memory.features[:memory.size, 4 * 69 + 2:4 * 69 + 5], axis=1))
+        self.assertEqual(seen_streets, {0, 1, 2})
+        before = solver.stats()
+        for path in ([], ['check'], ['check', 'check', 'deal:Ts'],
+                     ['check', 'check', 'deal:Ts', 'check', 'check', 'deal:3d']):
+            view = solver.inspect(path)
+            self.assertAlmostEqual(view['prediction_coverage'], 1)
+            self.assertAlmostEqual(sum(view['aggregate']), 1, places=6)
+            self.assertTrue(all(len(r['probabilities']) == len(view['actions']) for r in view['rows']))
+        self.assertEqual(solver.stats(), before)
 
     def test_reservoir_is_bounded_and_samples_the_entire_stream(self):
         retained = np.zeros(100, dtype=int)

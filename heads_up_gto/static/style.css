@@ -25,3 +25,9 @@
 .action-list.compact .action-name{font-size:12px;overflow-wrap:anywhere}
 .action-list.compact .action-freq{font-size:clamp(18px,2vw,30px);letter-spacing:-.5px}
 .action-list.compact .action-extra{position:static;max-width:none;text-align:left;margin-top:6px;font-size:9px}
+.comparison-dialog{width:1040px}
+.comparison-scroll{overflow-x:auto}
+.comparison-table{width:100%;border-collapse:collapse;font-size:12px;text-align:left}
+.comparison-table th,.comparison-table td{padding:12px 10px;border-bottom:1px solid #3b4044;vertical-align:top;min-width:90px}
+.comparison-table td div{margin-bottom:4px}
+.comparison-table small{display:block;color:var(--muted);line-height:1.5}

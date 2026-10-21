@@ -49,11 +49,6 @@ class APITests(unittest.TestCase):
         settings = {'backend': 'deep_cfr', 'mode': 'exact', 'deep_hidden': 32,
                     'deep_buffer_size': 128, 'deep_traversals': 2, 'deep_train_steps': 2,
                     'deep_batch_size': 16, 'deep_inference_batch': 2}
-        with self.assertRaises(HTTPError) as error:
-            self.request('/api/solve', {**initial, 'settings': settings})
-        self.assertEqual(error.exception.code, 400)
-        self.assertIn('turn or river', error.exception.read().decode())
-        error.exception.close()
         path = ['check', 'check', 'deal:2h', 'check', 'check', 'deal:3d']
         refined = self.wait(self.request(f"/api/jobs/{parent['id']}/refine",
                                         {'path': path, 'settings': settings, 'iterations': 10}))
@@ -69,6 +64,30 @@ class APITests(unittest.TestCase):
         exported = self.request(f"/api/jobs/{refined['id']}/export", {'path': []})
         self.assertEqual(exported['metadata']['settings']['backend'], 'deep_cfr')
         self.assertTrue(exported['node']['neural']['predictions'])
+
+    @unittest.skipUnless(all(importlib.util.find_spec(x) is not None for x in ('torch', 'numpy')), 'Install .[deep]')
+    def test_flop_neural_solve_and_read_only_reference_comparison(self):
+        payload = {'flop': 'As Kd 7c', 'preflop': 'raise:2.5/call', 'time_limit_seconds': 1e-9,
+                   'settings': {'backend': 'deep_cfr', 'mode': 'exact', 'deep_hidden': 32,
+                                'deep_buffer_size': 128, 'deep_traversals': 1,
+                                'deep_train_steps': 1, 'deep_batch_size': 16}}
+        # Exercise initialization and export only; leave this real scenario's
+        # training to the user. Tiny synthetic games test neural learning.
+        job = self.wait(self.request('/api/solve', payload))
+        prefix = '/api/jobs/' + job['id']
+        self.assertEqual(job['stats']['backend'], 'deep_cfr')
+        self.assertTrue(job['metadata']['reference_line_available'])
+        self.assertEqual(job['stats']['iterations'], 0)
+        report = self.request(prefix + '/comparison', {})
+        self.assertFalse(report['reference_frequencies_available'])
+        self.assertEqual(len(report['nodes']), 7)
+        self.assertEqual(report['nodes'][-1]['model']['pot'], 21)
+        self.assertEqual(report['nodes'][-1]['reference']['pot'], 41)
+        self.assertEqual(report['nodes'][0]['model']['aggregate'], [])
+        self.assertEqual(report['stats']['iterations'], 0)
+        self.assertEqual(len(report['root_ranges']), 2)
+        self.assertEqual(report['root_state']['street'], 0)
+        self.assertEqual(self.request(prefix)['stats'], job['stats'])
 
     def test_cross_origin_rejected(self):
         with self.assertRaises(HTTPError) as error:self.request('/api/solve',{},'https://example.com')

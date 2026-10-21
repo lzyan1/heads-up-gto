@@ -8,6 +8,7 @@ const player = actor => actor===0?'BB':'SB';
 const deepFields = [['deep-device','deep_device'],['deep-hidden','deep_hidden'],['deep-buffer-size','deep_buffer_size'],['deep-traversals','deep_traversals'],['deep-train-steps','deep_train_steps'],['deep-batch-size','deep_batch_size'],['deep-inference-batch','deep_inference_batch']];
 let config=null, prePath=[], preEnd=null, node=null, phase='preflop';
 let ctx=null, contexts=new Map(), loading=false, pollTimer=null, view='strategy', pinned=null, hovered=null, groups=new Map(), picker=null;
+let comparison=null;
 const locked = () => loading || !!ctx?.job.busy;
 function el(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=text;return e;}
 function button(text,cls,handler){const b=el('button',cls,text);b.type='button';b.onclick=handler;return b;}
@@ -113,11 +114,13 @@ function controls(){
   $('new-hand').disabled=locked();
   $('settings-open').disabled=false;
   $('load-spot').disabled=locked();
+  $('reference-preset').disabled=locked();
   $('stop').hidden=!busy;$('stop').disabled=loading;
   const hasSolve=!!ctx&&phase==='postflop';
   $('resume').hidden=!hasSolve||busy;$('resume').disabled=loading;
   $('refine').hidden=!hasSolve||busy||!node||!!node.pending||!!node.terminal;$('refine').disabled=loading;
   $('export').hidden=!hasSolve||busy||!node;$('export').disabled=loading;
+  $('compare').hidden=!hasSolve||busy||!ctx?.job.metadata.reference_line_available;$('compare').disabled=loading;
   if(busy){const s=ctx.job.stats,timed=s.time_limit_seconds!=null;
     const unit=s.backend==='deep_cfr'?'neural rounds':'iterations';
     const phaseLabel={sampling_0:'Sampling BB',sampling_1:'Sampling SB',advantage_0:'Fitting BB advantages',advantage_1:'Fitting SB advantages',average_0:'Fitting BB average',average_1:'Fitting SB average'}[s.phase];
@@ -308,6 +311,11 @@ $('settings-open').onclick=()=>{restoreSettings();$('settings-error').hidden=tru
 $('settings-close').onclick=()=>$('settings-dialog').close();
 $('stop-mode').onchange=updateSettingsFields;$('mode').onchange=updateSettingsFields;$('chance-mode').onchange=updateSettingsFields;
 $('backend').onchange=()=>{if($('backend').value==='deep_cfr')$('stop-mode').value='time';updateSettingsFields();};
+$('reference-preset').onclick=()=>{
+  $('backend').value='deep_cfr';$('stop-mode').value='time';
+  $('preflop-input').value='raise:2.5 / call';$('flop-input').value='As Kd 7c';
+  updateSettingsFields();$('time-limit').focus();
+};
 async function validateConfig(candidate){await api('/api/settings/validate',candidate);}
 $('settings-form').onsubmit=e=>{e.preventDefault();task(async()=>{
   const candidate=readConfig();await validateConfig(candidate);
@@ -331,5 +339,33 @@ $('refine').onclick=()=>task(async()=>{
 });
 function download(data,name){const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'})),a=el('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 $('export').onclick=()=>task(async()=>download(await api(`/api/jobs/${ctx.job.id}/export`,{path:node.path}),'heads-up-continuation.json'));
+$('compare').onclick=()=>task(async()=>{
+  const target=ctx;
+  comparison=await api(`/api/jobs/${target.job.id}/comparison`,{});
+  $('comparison-note').textContent=comparison.notice;
+  const rows=$('comparison-rows');rows.replaceChildren();
+  for(const entry of comparison.nodes){
+    const n=entry.model,r=entry.reference,tr=el('tr');
+    tr.append(el('th','',entry.label));
+    const ours=el('td'),reference=el('td'),frequencies=el('td'),inspect=el('td');
+    for(const [cell,data,selected] of [[ours,n,entry.model_selected],[reference,r,r.selected]]){
+      cell.append(el('div','',selected?selected.replace(':',' '):'Awaiting action'),
+        el('small','',`Pot ${fmt(data.pot)} BB · stacks ${data.stacks.map(fmt).join(' / ')}`));
+    }
+    if(n.aggregate.length)n.actions.forEach((a,i)=>frequencies.append(el('div','',`${shortAction(a)}: ${pct(n.aggregate[i])}`)));
+    else frequencies.append(el('div','','No completed strategy yet'));
+    frequencies.append(el('small','',`${pct(n.coverage)} ${n.neural?'direct samples':'with samples'}`));
+    if(n.fallback_used)frequencies.append(el('small','','Earlier ranges use an untrained uniform fallback'));
+    inspect.append(button('View','quiet',()=>task(async()=>{
+      const river=comparison.nodes.at(-1).model;
+      target.path=[...comparison.path];target.end=river;
+      await inspectPost(target,n.path);$('comparison-dialog').close();
+    })));
+    tr.append(ours,reference,frequencies,inspect);rows.append(tr);
+  }
+  $('comparison-dialog').showModal();
+});
+$('comparison-close').onclick=()=>$('comparison-dialog').close();
+$('comparison-export').onclick=()=>{if(comparison)download(comparison,'gto-wizard-line-comparison.json');};
 $('download-chart').onclick=()=>task(async()=>download(await api('/api/builtin-chart'),'gto-wizard-preflop.json'),'settings-error');
 updateSettingsFields();config=readConfig();task(()=>resetHand());

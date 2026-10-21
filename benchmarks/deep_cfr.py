@@ -1,7 +1,7 @@
 """Equal-time tabular/Deep CFR comparison; exact exploitability on tiny rivers.
 
 Run from the repository with PYTHONPATH=. and the optional .[deep] dependencies.
-Turn results report sampling/predictions only, not an exploitability estimate.
+Flop/turn results report sampling/predictions only, not an exploitability estimate.
 """
 import argparse
 from dataclasses import asdict
@@ -20,10 +20,10 @@ def main():
     parser.add_argument('--seconds', type=float, default=30)
     parser.add_argument('--seeds', type=int, nargs='+', default=[7, 23])
     parser.add_argument('--devices', nargs='+', choices=['cpu', 'mps'], default=['cpu'])
-    parser.add_argument('--street', choices=['turn', 'river'], default='river')
+    parser.add_argument('--street', choices=['flop', 'turn', 'river'], default='river')
     parser.add_argument('--output', type=Path, default=Path('deep-cfr-results.json'))
     args = parser.parse_args()
-    board = parse_cards('2c 7d 9h Js' + (' Qc' if args.street == 'river' else ''))
+    board = parse_cards('2c 7d 9h Js Qc')[:{'flop': 3, 'turn': 4, 'river': 5}[args.street]]
     root = State(2, (3, 3), board, street=len(board) - 3)
     ranges = parse_range('AsAh,6s6h'), parse_range('KsKh,5s5h')
     results = {'platform': platform.platform(), 'street': args.street,
@@ -50,8 +50,10 @@ def main():
                 if args.street == 'river':
                     record['exploitability_bb'] = river_exploitability(solver)['exploitability_bb']
                 paths = {'root': []}
-                if args.street == 'turn':
-                    paths['river_after_checks'] = ['check', 'check', 'deal:Qc']
+                if args.street == 'flop':
+                    paths['turn_after_checks'] = ['check', 'check', 'deal:Js']
+                if args.street != 'river':
+                    paths['river_after_checks'] = paths.get('turn_after_checks', []) + ['check', 'check', 'deal:Qc']
                 record['views'] = {}
                 for name, path in paths.items():
                     view = solver.inspect(path)

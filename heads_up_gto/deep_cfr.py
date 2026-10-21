@@ -1,4 +1,4 @@
-"""Small, memory-bounded Deep CFR pilot for a fixed turn/river range game.
+"""Small, memory-bounded Deep CFR pilot for a fixed postflop range game.
 
 External sampling, alternating player updates, uniform reservoir replay and
 linear iteration weighting follow Brown et al. (ICML 2019). Advantage models
@@ -20,6 +20,7 @@ import torch
 from torch import nn
 
 from .cards import score
+from .backends import validate_neural_root
 from .game import Settings
 from .solver import Solver
 
@@ -138,8 +139,9 @@ class SampleCounts:
 class DeepCFRSolver(Solver):
     def __init__(self, root, ranges, settings):
         Settings.from_dict(vars(settings))
-        if settings.backend != "deep_cfr" or root.street not in (1, 2):
-            raise ValueError("Deep CFR requires backend deep_cfr and a fixed turn or river root.")
+        if settings.backend != "deep_cfr":
+            raise ValueError("Deep CFR requires backend deep_cfr.")
+        validate_neural_root(root)
         super().__init__(root, ranges, settings)
         if settings.deep_device == "mps" and not torch.backends.mps.is_available():
             raise ValueError("MPS is unavailable in this Python environment. Choose CPU or install an MPS-enabled PyTorch build.")
@@ -294,7 +296,7 @@ class DeepCFRSolver(Solver):
 
     def train(self, iterations=None, progress=None, *, time_limit_seconds=None):
         if self._failed:
-            raise ValueError("This neural run failed. Start a new refinement; the last complete average policy remains available.")
+            raise ValueError("This neural run failed. Start a new solve or refinement; the last complete average policy remains available.")
         if (iterations is None) == (time_limit_seconds is None):
             raise ValueError("Choose either rounds or a time limit.")
         if iterations is not None and (type(iterations) is not int or iterations < 1):
