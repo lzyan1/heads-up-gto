@@ -48,13 +48,15 @@
     <p class="hint">Applies to the next solve, refinement or Train more. Each timed run gets a fresh time limit and finishes its current iteration before stopping. You can stop early at any time.</p>
     <label for="mode">Card model</label><select id="mode"><option value="bucketed">Strength buckets</option><option value="exact">Exact cards</option></select>
     <p class="hint" id="card-model-help">Hands in the same strength bucket share a strategy.</p>
+    <label for="chance-mode">Board sampling</label><select id="chance-mode"><option value="sampled">Sample turn and river</option><option value="enumerate_turns">Enumerate every turn · experimental</option></select>
+    <p class="hint">Turn enumeration uses exact hands and one sampled river per legal turn. Each iteration costs more. Turn/river refinements use normal sampling.</p>
     <details><summary>Training · advanced settings</summary>
       <div id="bucket-settings" class="two"><div><label for="buckets">Strength buckets</label><input id="buckets" type="number" min="4" max="32" step="1" value="8" required></div><div><label for="samples">Equity samples</label><input id="samples" type="number" min="8" max="256" step="1" value="24" required></div></div>
       <div class="two"><div><label for="seed">Random seed</label><input id="seed" type="number" min="0" max="2147483647" step="1" value="7" required></div><div><label for="max-nodes">Decision limit (optional)</label><input id="max-nodes" type="number" min="1" step="1" placeholder="Unlimited"></div></div>
       <p class="hint">Leave the decision limit blank for no cap. Reaching a chosen limit keeps partial results; increase or clear it to train more.</p>
     </details>
     <details><summary>Load a specific spot</summary><label for="preflop-input">Preflop action sequence</label><input id="preflop-input" value="raise:2.5 / call" spellcheck="false"><p class="hint">SB acts first. Example: raise:2.5 / raise:11.5 / call</p><label for="flop-input">Flop</label><input id="flop-input" value="As Kd 7c" spellcheck="false"><button id="load-spot" type="button" class="secondary">Load spot &amp; solve</button></details>
-    <p class="hint">GTO Wizard preflop charts are fixed. Card model, buckets, samples and seed apply to new solves and refinements. Train more keeps the existing card model and strategy.</p>
+    <p class="hint">GTO Wizard preflop charts are fixed. Card model, board sampling, buckets, samples and seed apply to new solves and refinements. Train more keeps the existing card model and strategy.</p>
     <p id="settings-error" class="dialog-error" role="alert" hidden></p><div class="settings-actions"><button id="download-chart" type="button" class="quiet">Download charts ↓</button><button type="submit" class="primary">Save settings</button></div>
   </form>
 </dialog>

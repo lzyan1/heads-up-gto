@@ -40,7 +40,9 @@ def kuhn_experiment(iterations=20000):
     for _ in range(iterations):
         hands=rng.choice(deals)
         winner=int(hands[1]>hands[0])
+        solver._iteration_strategies={}
         for player in (0,1):solver._walk(root,hands,(),winner,player)
+        solver._iteration_strategies=None
     def evaluate(hands, pure_player=None, pure=None):
         def walk(state):
             if state.terminal:return state.payoff(state.winner if state.terminal=='fold' else int(hands[1]>hands[0]),0)

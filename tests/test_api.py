@@ -153,6 +153,20 @@ class APITests(unittest.TestCase):
         self.assertEqual(len(report['root_state']['board']),4);self.assertEqual(len(report['root_ranges']),2)
         resumed=self.wait(self.request(newprefix+'/resume',{'iterations':50}));self.assertEqual(resumed['stats']['iterations'],150)
 
+    def test_turn_enumeration_settings_export_and_resume(self):
+        payload={'flop':'As Td 6h','preflop':'raise:2.5/raise:11.5/call','iterations':10,
+                 'settings':{'mode':'exact','chance_mode':'enumerate_turns'}}
+        job=self.wait(self.request('/api/solve',payload))
+        self.assertEqual(job['stats']['chance_mode'],'enumerate_turns')
+        self.assertEqual(job['stats']['enumerated_turns'],450)
+        prefix='/api/jobs/'+job['id']
+        report=self.request(prefix+'/export',{'path':[]})
+        self.assertEqual(report['metadata']['settings']['chance_mode'],'enumerate_turns')
+        self.assertIn('bet:88.5',[a['key'] for a in report['node']['actions']])
+        resumed=self.wait(self.request(prefix+'/resume',{'iterations':10}))
+        self.assertEqual(resumed['stats']['enumerated_turns'],900)
+        self.assertEqual(resumed['stats']['iterations'],20)
+
     def test_stop_returns_partial_results(self):
         job=self.request('/api/solve',{'flop':'As Kd 7c','preflop':'raise:2.5/call','iterations':100000})
         self.request('/api/jobs/'+job['id']+'/stop',{})

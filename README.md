@@ -175,3 +175,78 @@ For focused turn study, use the existing Refine action after selecting a board.
 This concentrates samples on that decision but relies on inherited approximate
 ranges and is not safe full-game equilibrium refinement. Large bets and all-ins
 remain available; no hand bucketing is needed for exact mode.
+
+## Experimental enumeration of turn cards
+
+In Settings, select **Board sampling → Enumerate every turn · experimental**.
+This automatically selects exact cards. For the comparison spot, load flop
+`As Td 6h` with preflop history `raise:2.5/raise:11.5/call` (23 BB pot,
+88.5 BB remaining per player). Choose a time limit when comparing approaches:
+one enumerated iteration does much more work than a sampled iteration.
+
+API setting: `{"mode":"exact","chance_mode":"enumerate_turns"}`. The default
+`chance_mode` remains `sampled`. Resuming preserves the original traversal mode;
+start a new solve to compare modes. The existing all-in and large-bet options
+are unchanged. New solve metadata and statistics include `chance_mode`;
+`enumerated_turns` counts the runouts prepared across sampled hand pairs.
+
+Each iteration still samples a compatible private-hand pair. It prepares all
+45 legal turn cards and one uniformly sampled river from the 44 remaining
+cards for each turn. Both traversals reuse this bank. When betting advances
+from flop to turn, all turn branches are visited and their utilities are
+averaged. Descendant regret and average-policy sums receive the corresponding
+1/45 chance weight; visit counts still count actual visits. Flop all-in
+showdowns also average over this bank. No unobserved river enters a turn key.
+If the solve starts on the turn or river, normal runout sampling applies.
+This is **turn enumeration**, not full game-tree or 1,980-runout enumeration:
+opponent actions, private hands and rivers remain sampled.
+
+The experiment can spend less time on distinct private hands and repeated
+regret updates. Broader board coverage need not mean better convergence, and
+raw iteration counts are not comparable. Node-budget interruption remains
+possible and is disclosed by the diagnostics.
+
+Reproduce the equal-time experiment from the project directory:
+
+```sh
+PYTHONPATH=. python3 benchmarks/turn_sampling.py --seconds 60 --seeds 7 23 --output turn-sampling-results.json
+```
+
+The benchmark uses a two-million-node guard per run (override with `--max-nodes`,
+where 0 means unlimited). It records actual completed work, full decision rows,
+coverage, per-street sample distributions and configuration. A capped run is
+not an equal-time comparison. Small tests cover all 45 legal turns, blockers,
+conditional showdown winners, 1/45 weighting, early all-in evaluation, resume,
+and API export. Existing Kuhn and river convergence tests remain in the suite.
+
+The observed GTO Wizard solution uses a 12.1 BB flop bet and no immediate shove
+at its root. This app's three-bet-pot profile uses 7.6 BB plus an 88.5 BB shove
+on this flop; preflop frequencies are rounded. Treat Wizard frequencies as a
+qualitative reference, not an exact numerical convergence target for this tree.
+
+## Shared-deal update-order fix
+
+Both player traversals reuse a sampled deal. Their policies must therefore stay
+fixed for that entire iteration. The solver now caches the pre-update strategy
+at every visited information set and releases the cache after both traversals,
+or on interruption. Regret and average accumulators can be updated in place,
+but those changes do not affect actions until the next iteration.
+
+Previously player 1's traversal could respond to a player 0 strategy just
+updated from the same hidden hands/runout. This biases the sampling estimator,
+particularly at sparsely visited information sets. A regression game with an
+unobserved fair coin gives an exact first-iteration expected call-regret
+increment of +0.25 under the uniform profile; the old ordering gives 0, and
+frozen policies restore +0.25. Existing Kuhn and river tests alone did not catch
+this early-iteration bias.
+
+Stats label corrected runs with `policy_update: simultaneous_frozen`. Start a
+fresh solve after restarting the server; old strategy accumulators were produced
+by the previous update order. This fix does not certify full Hold'em convergence
+or make this action menu equivalent to GTO Wizard's. All-in actions remain.
+
+`benchmarks/policy_freeze.py` reproduces a short equal-time comparison against
+the legacy update order. Its near-pure frequency counts compare current regret
+matching with the displayed historical average; a more nearly pure current
+strategy is not automatically a better strategy. Mixed averages alone do not
+prove that a solver is wrong.

@@ -3,6 +3,7 @@
 Deals use the correct joint product of range weights, conditioned on disjoint cards.
 Future cards are sampled from the remaining deck. Both players' private observations
 and public observations are retained across streets; no future card enters a key.
+Policies are frozen across both traversals of each shared-deal iteration.
 """
 from bisect import bisect_left
 from collections import Counter
@@ -101,6 +102,8 @@ class Solver:
         self.attempted_iterations = 0
         self.completed_traversals = [0, 0]
         self.interrupted_iterations = 0
+        self.enumerated_turns = 0
+        self._iteration_strategies = None
 
     def _opponent_hand(self, player, blocked, rng):
         dist = self.distributions[1 - player]
@@ -151,14 +154,43 @@ class Solver:
         public = tuple(board_observation(state.board[:n]) for n in lengths)
         return (player, state.path, private, public)
 
-    def _walk(self, state, hands, runout, winner, traverser):
+    def turn_runouts(self, hands):
+        """Stratify public chance: every legal turn, one uniform river per turn.
+
+        Reuse the bank for both traversals and all betting histories. A flop
+        all-in also uses this bank, so its value has the same chance estimator.
+        Private hands and opponent actions remain sampled.
+        """
+        if self.settings.chance_mode != "enumerate_turns" or len(self.root.board) != 3:
+            return None
+        blocked = set((*hands[0], *hands[1], *self.root.board))
+        available = [c for c in DECK if c not in blocked]
+        bank = []
+        for turn in available:
+            river = self.rng.choice([c for c in available if c != turn])
+            board = (*self.root.board, turn, river)
+            a, b = score(hands[0], board), score(hands[1], board)
+            bank.append((board, 0 if a > b else 1 if b > a else -1))
+        self.enumerated_turns += len(bank)
+        return bank
+
+    def _walk(self, state, hands, runout, winner, traverser, chance_weight=1.0, turn_bank=None):
         self._visits += 1
         if self._visits % 256 == 0 and self.cancel.is_set():
             raise Cancelled()
         if state.terminal:
+            if state.terminal != "fold" and turn_bank is not None:
+                return sum(state.payoff(w, traverser) for _, w in turn_bank) / len(turn_bank)
             return state.payoff(state.winner if state.terminal == "fold" else winner, traverser)
         if state.pending:
-            return self._walk(state.deal(runout[len(state.board)]), hands, runout, winner, traverser)
+            if turn_bank is not None:
+                # Child utilities are conditional; weight their mean here and
+                # their regret/average accumulators by chance reach below.
+                probability = 1.0 / len(turn_bank)
+                return sum(probability * self._walk(state.deal(board[3]), hands, board, w,
+                           traverser, chance_weight * probability)
+                           for board, w in turn_bank)
+            return self._walk(state.deal(runout[len(state.board)]), hands, runout, winner, traverser, chance_weight)
         actions = state.actions(self.settings)
         key = self.info_key(state, hands[state.actor])
         node = self.nodes.get(key)
@@ -166,21 +198,29 @@ class Solver:
             if self.settings.max_nodes is not None and len(self.nodes) >= self.settings.max_nodes:
                 raise BudgetReached()
             node = self.nodes[key] = Node(len(actions))
-        strategy = node.strategy()
+        # Both traversals share a sampled deal. Freeze their policies before
+        # either player's updates can condition actions on that sampled future.
+        # Cache only visited information sets; release it after each iteration.
+        if self._iteration_strategies is None:
+            strategy = node.strategy()
+        else:
+            strategy = self._iteration_strategies.get(key)
+            if strategy is None:
+                strategy = self._iteration_strategies[key] = tuple(node.strategy())
         if state.actor == traverser:
-            values = [self._walk(state.apply(a), hands, runout, winner, traverser) for a in actions]
+            values = [self._walk(state.apply(a), hands, runout, winner, traverser, chance_weight, turn_bank) for a in actions]
             value = sum(p * v for p, v in zip(strategy, values))
             for i, v in enumerate(values):
-                node.regrets[i] += v - value
+                node.regrets[i] += chance_weight * (v - value)
             node.updates += 1
             return value
         # Opponent actions are sampled from current strategy. Their own reach is
         # represented by visitation; the traverser's actions are all enumerated.
         for i, p in enumerate(strategy):
-            node.total[i] += p
+            node.total[i] += chance_weight * p
         node.averages += 1
         action = self.rng.choices(actions, weights=strategy, k=1)[0]
-        return self._walk(state.apply(action), hands, runout, winner, traverser)
+        return self._walk(state.apply(action), hands, runout, winner, traverser, chance_weight, turn_bank)
 
     def train(self, iterations=None, progress=None, *, time_limit_seconds=None):
         if (iterations is None) == (time_limit_seconds is None):
@@ -208,13 +248,16 @@ class Solver:
                     break
                 self.attempted_iterations += 1
                 in_iteration = True
+                self._iteration_strategies = {}
                 hands, runout = self.sample_deal()
                 a, b = score(hands[0], runout), score(hands[1], runout)
                 winner = 0 if a > b else 1 if b > a else -1
+                turn_bank = self.turn_runouts(hands)
                 for player in (0, 1):
-                    self._walk(self.root, hands, runout, winner, player)
+                    self._walk(self.root, hands, runout, winner, player, turn_bank=turn_bank)
                     self.completed_traversals[player] += 1
                 self.iterations += 1
+                self._iteration_strategies = None
                 in_iteration = False
                 now = time.monotonic()
                 if progress and now - last_report > .5:
@@ -232,6 +275,7 @@ class Solver:
             # Keep accumulated strategy available instead of failing the job.
             self.status = "memory_exhausted"
         finally:
+            self._iteration_strategies = None
             if in_iteration:
                 self.interrupted_iterations += 1
             self.run_elapsed = time.monotonic() - start
@@ -239,7 +283,7 @@ class Solver:
         return self.stats(target)
 
     def stats(self, target=None):
-        return {"status": self.status, "iterations": self.iterations, "target": target, "nodes": len(self.nodes), "seconds": round(self.elapsed, 2), "run_seconds": round(self.run_elapsed, 2), "time_limit_seconds": self.time_limit_seconds, "mode": self.settings.mode, "exploitability": None, "attempted_iterations": self.attempted_iterations, "completed_traversals": list(self.completed_traversals), "interrupted_iterations": self.interrupted_iterations, "partial_updates_possible": self.interrupted_iterations > 0, "tree_visits": self._visits, "max_nodes": self.settings.max_nodes}
+        return {"status": self.status, "iterations": self.iterations, "target": target, "nodes": len(self.nodes), "seconds": round(self.elapsed, 2), "run_seconds": round(self.run_elapsed, 2), "time_limit_seconds": self.time_limit_seconds, "mode": self.settings.mode, "exploitability": None, "attempted_iterations": self.attempted_iterations, "completed_traversals": list(self.completed_traversals), "interrupted_iterations": self.interrupted_iterations, "partial_updates_possible": self.interrupted_iterations > 0, "tree_visits": self._visits, "max_nodes": self.settings.max_nodes, "chance_mode": self.settings.chance_mode, "enumerated_turns": self.enumerated_turns, "policy_update": "simultaneous_frozen"}
 
     def coverage_diagnostics(self):
         """On-demand scan of stored nodes; unseen information sets are not counted."""

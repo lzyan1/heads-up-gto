@@ -27,11 +27,14 @@ function cards(cards){const e=el('div','board');cards.forEach(c=>e.append(card(c
 function shortAction(a){return a.label.replace(/ BB.*/,'').replace('Raise to','Raise');}
 function readConfig(){
   return {...trainingLimit($('stop-mode').value,Number($('iterations').value),Number($('time-limit').value)),settings:{
-    mode:$('mode').value,buckets:Number($('buckets').value),equity_samples:Number($('samples').value),seed:Number($('seed').value),
+    mode:$('mode').value,chance_mode:$('chance-mode').value,buckets:Number($('buckets').value),equity_samples:Number($('samples').value),seed:Number($('seed').value),
     max_nodes:$('max-nodes').value.trim()===''?null:Number($('max-nodes').value)
   }};
 }
 function updateSettingsFields(){
+  const enumerated=$('chance-mode').value==='enumerate_turns';
+  if(enumerated)$('mode').value='exact';
+  $('mode').disabled=enumerated;
   const timed=$('stop-mode').value==='time',exact=$('mode').value==='exact';
   $('iteration-field').hidden=timed;$('iterations').disabled=timed;$('time-field').hidden=!timed;$('time-limit').disabled=!timed;
   $('bucket-settings').hidden=exact;$('buckets').disabled=exact;$('samples').disabled=exact;
@@ -41,7 +44,7 @@ function restoreSettings(){
   const timed=config.time_limit_seconds!==undefined;
   $('stop-mode').value=timed?'time':'iterations';
   $(timed?'time-limit':'iterations').value=timed?config.time_limit_seconds:config.iterations;
-  for(const [id,key] of [['mode','mode'],['buckets','buckets'],['samples','equity_samples'],['seed','seed'],['max-nodes','max_nodes']])$(id).value=config.settings[key]??'';
+  for(const [id,key] of [['chance-mode','chance_mode'],['mode','mode'],['buckets','buckets'],['samples','equity_samples'],['seed','seed'],['max-nodes','max_nodes']])$(id).value=config.settings[key]??'';
   updateSettingsFields();
 }
 
@@ -232,6 +235,7 @@ function render(scroll=false){
   $('coverage').textContent=n?.phase==='postflop'&&n.actions.length?`${pct(n.coverage)} with samples`:n?.actions.length&&!n.manual?(n.coverage<.999?`${pct(n.coverage)} chart coverage`:'Chart strategy'):'';
   $('source-label').textContent='GTO Wizard · hardcoded preflop';
   let note=phase==='preflop'?'Preflop frequencies are rounded to 10%. SB’s 4-bet jam and BB’s 5-bet jam are allowed. Opening and 3-bet jams are disabled.':'One scenario bet or raise size, plus all-in whenever legal. Heuristic sizes; approximate strategy, not a GTO certificate.';
+  if(phase==='postflop'&&ctx?.job.metadata.settings.chance_mode==='enumerate_turns')note+=' Experimental turn enumeration: all legal turns per sampled hand pair, one sampled river each; private hands and opponent actions still sampled.';
   if(phase==='postflop'&&n?.sizing)note+=` ${n.sizing.reason}`;
   if(phase==='preflop'&&n?.actions.length&&!n.manual&&n.coverage<.999)note+=' This chart omits some frequencies; averages include only hands with a complete mix.';
   if(phase==='postflop'&&ctx?.job.metadata.settings.mode==='bucketed')note+=' Hands in the same strength bucket share frequencies.';
@@ -284,7 +288,7 @@ for(const b of document.querySelectorAll('[data-view]'))b.onclick=()=>{view=b.da
 $('new-hand').onclick=()=>task(()=>resetHand());
 $('settings-open').onclick=()=>{restoreSettings();$('settings-error').hidden=true;$('settings-dialog').showModal();};
 $('settings-close').onclick=()=>$('settings-dialog').close();
-$('stop-mode').onchange=updateSettingsFields;$('mode').onchange=updateSettingsFields;
+$('stop-mode').onchange=updateSettingsFields;$('mode').onchange=updateSettingsFields;$('chance-mode').onchange=updateSettingsFields;
 async function validateConfig(candidate){await api('/api/settings/validate',candidate);}
 $('settings-form').onsubmit=e=>{e.preventDefault();task(async()=>{
   const candidate=readConfig();await validateConfig(candidate);

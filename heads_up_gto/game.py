@@ -16,6 +16,7 @@ class Settings:
     buckets: int = 8
     equity_samples: int = 24
     mode: str = "bucketed"
+    chance_mode: str = "sampled"  # or enumerate_turns (exact cards only)
     seed: int = 7
     max_nodes: int | None = None  # unlimited unless an optional limit is chosen
 
@@ -32,6 +33,10 @@ class Settings:
         obj = cls(**data)
         if len(obj.sizes) != 3 or any(len(row) > 3 or any(not math.isfinite(x) or not .1 <= x <= 3 for x in row) for row in obj.sizes):
             raise ValueError("Give up to three pot fractions per street, each between 0.1 and 3.")
+        if obj.chance_mode not in ("sampled", "enumerate_turns"):
+            raise ValueError("Chance mode must be sampled or enumerate_turns.")
+        if obj.chance_mode == "enumerate_turns" and obj.mode != "exact":
+            raise ValueError("Turn enumeration requires exact cards.")
         if obj.mode not in ("bucketed", "exact"):
             raise ValueError("Mode must be bucketed or exact.")
         if type(obj.max_raises) is not int or not 0 <= obj.max_raises <= 2:
