@@ -1,4 +1,4 @@
-"""Dependency-free loopback web server and single-worker solve queue."""
+"""Loopback web server and single active hybrid study job."""
 import argparse
 from dataclasses import asdict, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -17,6 +17,7 @@ from .game import Settings, State
 from .sizing import profile_for, sizing_metadata
 from .preflop import chart_ranges, reconstruct
 from .deep_cfr import DeepCFRSolver
+from .river_only import RiverOnlySolver
 from .screenshot_charts import screenshot_chart
 from .navigation import preflop_view
 from .reference_line import supports_reference, comparison_report
@@ -36,6 +37,10 @@ def app_settings(data):
     # Legacy sizing inputs cannot alter the scenario size plus all-in menu. Keep the
     # generic engine controls only for internal diagnostic games.
     return replace(settings, sizes=((), (), ()), max_raises=2, include_all_in=True)
+
+
+def create_solver(root, ranges, settings):
+    return RiverOnlySolver(root, ranges, settings) if root.street == 2 else DeepCFRSolver(root, ranges, settings)
 
 
 def round_count(value):
@@ -74,8 +79,8 @@ def prepare(payload):
     approximation = {"frequency_step": chart["frequency_step"], "source": chart["provenance"]["source"], "jam_restriction": chart["provenance"]["jam_restriction"]}
     profile = profile_for(preflop.pot, preflop.stacks)
     root = State(preflop.pot, preflop.stacks, board, sizing_profile=profile)
-    solver = DeepCFRSolver(root, ranges, settings)
-    return solver, budget, {"name": name, "is_demo": is_demo, "backend": "deep_cfr", "range_source": "wizard", "sizing_status": dict.fromkeys(("flop", "turn", "river"), "scenario_heuristic"), "sizing": sizing_metadata(profile), "preflop": preflop.history, "combos": [len(r) for r in ranges], "weighted_combos": [round(sum(r.values()), 2) for r in ranges], "pot": root.pot, "stacks": root.stacks, "settings": asdict(settings), "training_budget": budget, "range_approximation": approximation, "reference_line_available": supports_reference(root)}
+    solver = create_solver(root, ranges, settings)
+    return solver, budget, {"name": name, "is_demo": is_demo, "backend": "hybrid_pure", "range_source": "wizard", "sizing_status": dict.fromkeys(("flop", "turn", "river"), "scenario_heuristic"), "sizing": sizing_metadata(profile), "preflop": preflop.history, "combos": [len(r) for r in ranges], "weighted_combos": [round(sum(r.values()), 2) for r in ranges], "pot": root.pot, "stacks": root.stacks, "settings": asdict(settings), "training_budget": budget, "range_approximation": approximation, "reference_line_available": supports_reference(root)}
 
 
 def run_job(job, budget):
@@ -213,8 +218,8 @@ class Handler(BaseHTTPRequestHandler):
                         if state.terminal or state.pending:
                             raise ValueError("Refine an active decision after dealing the next board card.")
                         settings = app_settings(payload.get("settings", asdict(job["solver"].settings)))
-                        solver = DeepCFRSolver(replace(state, path=()), ranges, settings)
-                        metadata = {**job["metadata"], "pot": state.pot, "stacks": state.stacks, "combos": [len(r) for r in ranges], "local_refinement": True, "parent_path": node_path, "fallback_used": fallback, "settings": asdict(settings), "training_budget": budget, "reference_line_available": supports_reference(solver.root)}
+                        solver = create_solver(replace(state, path=()), ranges, settings)
+                        metadata = {**job["metadata"], "pot": state.pot, "stacks": state.stacks, "combos": [len(r) for r in ranges], "local_refinement": True, "parent_path": node_path, "fallback_used": fallback, "settings": asdict(settings), "training_budget": budget, "backend": solver.stats()["backend"], "reference_line_available": supports_reference(solver.root)}
                         request = {"original": job["request"], "refine_path": node_path}
                         new_job = {"id": uuid.uuid4().hex, "solver": solver, "metadata": metadata, "request": request, "stats": running_stats(solver, budget), "busy": True}
                         if len(JOBS) >= 2:
@@ -241,11 +246,13 @@ class Handler(BaseHTTPRequestHandler):
                     selected = parse_cards(payload["hand"], 2) if payload.get("hand", "").strip() else None
                     node = job["solver"].inspect(node_path, selected)
                     if command == "export":
-                        return self.send_json({"version": 1, "notice": "Experimental approximate strategy; no full-game GTO guarantee or exploitability certificate.", "request": job["request"], "metadata": job["metadata"], "stats": job["stats"], "root_state": asdict(job["solver"].root), "root_ranges": [{combo_text(h): w for h, w in r.items()} for r in job["solver"].ranges], "node": node})
+                        return self.send_json({"version": 1, "notice": "Deterministic preflop/flop/turn with direct mixed river solving. River certificates apply only to the supplied boundary ranges and action tree, not the full game.", "request": job["request"], "metadata": job["metadata"], "stats": job["stats"], "root_state": asdict(job["solver"].root), "root_ranges": [{combo_text(h): w for h, w in r.items()} for r in job["solver"].ranges], "node": node})
                     return self.send_json(node)
             return self.send_json({"error": "Not found"}, 404)
         except (ValueError, TypeError, KeyError, OverflowError) as exc:
             self.send_json({"error": str(exc)}, 400)
+        except RuntimeError as exc:
+            self.send_json({"error": str(exc)}, 422)
         except Exception:
             traceback.print_exc()
             self.send_json({"error": "Unexpected server error. See the local terminal for details."}, 500)

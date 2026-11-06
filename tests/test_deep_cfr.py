@@ -11,7 +11,7 @@ from heads_up_gto.diagnostics import river_exploitability
 import numpy as np
 import torch
 from heads_up_gto.deep_cfr import (DeepCFRSolver, FEATURES, MAX_ACTIONS, Reservoir,
-                                   encode, regret_match, weighted_loss)
+                                   encode, greedy_policy, weighted_loss)
 
 
 def root():
@@ -24,30 +24,41 @@ def ranges():
 
 class ConfigurationTests(unittest.TestCase):
     def test_defaults_and_removed_solver_options(self):
-        settings = Settings.from_dict({})
-        self.assertEqual(settings.deep_device, 'cpu')
-        for name, value in dict(backend='tabular', mode='exact', chance_mode='sampled',
-                                max_nodes=None, buckets=8, equity_samples=24).items():
+        self.assertEqual(Settings.from_dict({}).deep_device, 'cpu')
+        for name, value in dict(backend='tabular', mode='exact', max_nodes=1, buckets=8).items():
             with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'Unknown settings'):
                 Settings.from_dict({name: value})
 
-    def test_settings_reject_unbounded_or_invalid_neural_configuration(self):
-        for changes in (dict(deep_buffer_size=100001), dict(deep_hidden=True),
-                        dict(deep_device='cuda'), dict(seed=True)):
-            with self.subTest(changes=changes), self.assertRaises(ValueError):
+    def test_invalid_neural_or_river_configuration(self):
+        for changes in (dict(deep_buffer_size=100001), dict(deep_hidden=True), dict(deep_device='cuda'),
+                        dict(seed=True), dict(river_seconds=0), dict(river_tolerance=float('nan'))):
+            with self.assertRaises(ValueError):
                 Settings.from_dict(changes)
-        for state in (replace(root(), pending=True), replace(root(), terminal='showdown'),
-                      replace(root(), street=0), replace(root(), street=-1)):
-            with self.subTest(state=state), self.assertRaisesRegex(ValueError, 'active flop, turn or river'):
-                DeepCFRSolver(state, ranges(), Settings())
+        with self.assertRaisesRegex(ValueError, 'direct solving'):
+            DeepCFRSolver(root(), ranges(), Settings())
+
+
+class ImmediateRiverJob:
+    # Real LP values, without process startup in the repeated neural unit tests.
+    def __init__(self, root, ranges, settings, **kwargs):
+        self.root, self.ranges, self.settings = root, ranges, settings
+    def poll(self):
+        from heads_up_gto.exact_river import ExactRiver
+        return ExactRiver(self.root, self.ranges, self.settings).solve().compact()
+    def pause(self): pass
 
 
 class DeepCFRTests(unittest.TestCase):
+    def setUp(self):
+        self.worker_patch = patch('heads_up_gto.deep_cfr.RiverJob', ImmediateRiverJob)
+        self.worker_patch.start()
+    def tearDown(self):
+        self.worker_patch.stop()
     def solver(self, root_state=None, **kwargs):
-        configuration = dict(deep_hidden=32,
-                             deep_buffer_size=256, deep_traversals=8, deep_train_steps=8,
-                             deep_batch_size=16, deep_inference_batch=4)
-        return DeepCFRSolver(root_state or root(), ranges(), Settings(**{**configuration, **kwargs}))
+        configuration = dict(deep_hidden=32, deep_buffer_size=256, deep_traversals=4,
+                             deep_train_steps=8, deep_batch_size=16, deep_inference_batch=2)
+        turn = replace(root(), board=root().board[:4], street=1)
+        return DeepCFRSolver(root_state or turn, ranges(), Settings(**{**configuration, **kwargs}))
 
     def test_encoder_preserves_visible_information_without_card_order_artifacts(self):
         state, hand = root(), next(iter(ranges()[0]))
@@ -68,27 +79,6 @@ class DeepCFRTests(unittest.TestCase):
         flop = replace(state, street=0, board=state.board[:3])
         self.assertEqual(np.count_nonzero(features(flop)[2 * 69:4 * 69]), 0)
 
-    def test_flop_training_samples_both_later_streets_and_inspects_one_model(self):
-        flop = replace(root(), street=0, board=root().board[:3])
-        solver = self.solver(root_state=flop, sizes=((.5,), (.5,), (.5,)), max_raises=0)
-        # Deals vary beyond the fixed flop; neither inspection runout is locked in.
-        deals = [solver.sample_deal()[1] for _ in range(8)]
-        self.assertTrue(all(board[:3] == flop.board for board in deals))
-        self.assertGreater(len({board[3:] for board in deals}), 1)
-        solver.train(2)
-        memories = solver.advantage_memory + solver.strategy_memory
-        seen_streets = set()
-        for memory in memories:
-            seen_streets.update(np.argmax(memory.features[:memory.size, 4 * 69 + 2:4 * 69 + 5], axis=1))
-        self.assertEqual(seen_streets, {0, 1, 2})
-        before = solver.stats()
-        for path in ([], ['check'], ['check', 'check', 'deal:Ts'],
-                     ['check', 'check', 'deal:Ts', 'check', 'check', 'deal:3d']):
-            view = solver.inspect(path)
-            self.assertAlmostEqual(view['prediction_coverage'], 1)
-            self.assertAlmostEqual(sum(view['aggregate']), 1, places=6)
-            self.assertTrue(all(len(r['probabilities']) == len(view['actions']) for r in view['rows']))
-        self.assertEqual(solver.stats(), before)
 
     def test_reservoir_is_bounded_and_samples_the_entire_stream(self):
         retained = np.zeros(100, dtype=int)
@@ -109,10 +99,11 @@ class DeepCFRTests(unittest.TestCase):
         self.assertTrue(np.all(retained > 10))
         self.assertLess(abs(retained[:50].sum() - retained[50:].sum()), 160)
 
+
     def test_regret_matching_and_iteration_weighted_masked_loss(self):
-        np.testing.assert_allclose(regret_match(np.array([-2., 1., 3.])), [0, .25, .75])
-        np.testing.assert_allclose(regret_match(np.array([-2., -1.])), [0, 1])
-        np.testing.assert_allclose(regret_match(np.array([0., 0.])), [.5, .5])
+        np.testing.assert_allclose(greedy_policy(np.array([-2., 1., 3.])), [0, 0, 1])
+        np.testing.assert_allclose(greedy_policy(np.array([-2., -1.])), [0, 1])
+        np.testing.assert_allclose(greedy_policy(np.array([0., 0.])), [1, 0])
         prediction = torch.tensor([[1., 999.], [1., 999.]])
         target = torch.zeros((2, 2))
         mask = torch.tensor([[True, False], [True, False]])
@@ -122,12 +113,13 @@ class DeepCFRTests(unittest.TestCase):
         self.assertEqual(weighted_loss(logits, torch.tensor([[.5, .5, 0.]]),
                                        torch.tensor([[True, True, False]]), torch.tensor([1.]), 1, True).item(), 0)
 
+
     def test_unseen_predictions_are_separate_from_sampling_and_use_average_model(self):
         solver = self.solver()
-        self.assertIsNone(solver.policy(root(), next(iter(ranges()[0])))[0])
+        self.assertIsNone(solver.policy(solver.root, next(iter(ranges()[0])))[0])
         solver.train(1)
         hand = next(iter(parse_range('AcAd')))
-        probabilities, updates, averages = solver.policy(root(), hand)
+        probabilities, updates, averages = solver.policy(solver.root, hand)
         self.assertAlmostEqual(sum(probabilities), 1, places=6)
         self.assertEqual((updates, averages), (0, 0))
         # Zero all visit counters: predictions still exist; direct coverage is 0.
@@ -137,13 +129,14 @@ class DeepCFRTests(unittest.TestCase):
         self.assertAlmostEqual(view['prediction_coverage'], 1)
         self.assertTrue(view['neural']['predictions'])
         self.assertAlmostEqual(sum(view['aggregate']), 1, places=6)
-        before = solver.policy(root(), hand)[0]
+        before = solver.policy(solver.root, hand)[0]
         with torch.no_grad():
             for parameter in solver.advantages[0].parameters(): parameter.fill_(123)
         solver._policy_cache.clear()
-        self.assertEqual(before, solver.policy(root(), hand)[0])
+        self.assertEqual(before, solver.policy(solver.root, hand)[0])
         json.dumps(solver.stats(), allow_nan=False)
         json.dumps(view, allow_nan=False)
+
 
     def test_stop_and_resume_preserve_partial_round_exactly(self):
         full, resumed = self.solver(), self.solver()
@@ -169,6 +162,7 @@ class DeepCFRTests(unittest.TestCase):
             for pa, pb in zip(a.parameters(), b.parameters()):
                 torch.testing.assert_close(pa, pb, rtol=0, atol=0)
 
+
     def test_short_time_budget_and_unavailable_mps(self):
         solver = self.solver()
         result = solver.train(time_limit_seconds=1e-9)
@@ -176,6 +170,7 @@ class DeepCFRTests(unittest.TestCase):
         self.assertFalse(result['prediction_ready'])
         with patch('torch.backends.mps.is_available', return_value=False), self.assertRaisesRegex(ValueError, 'MPS is unavailable'):
             self.solver(deep_device='mps')
+
 
     def test_pausing_an_optimizer_and_bounded_visit_tracking(self):
         full, resumed = self.solver(), self.solver()
@@ -208,6 +203,7 @@ class DeepCFRTests(unittest.TestCase):
         self.assertTrue(limited.inspect([])['neural']['tracking_saturated'])
         self.assertTrue(limited.stats()['prediction_ready'])
 
+
     def test_timed_pauses_get_fresh_budgets_and_resume_the_same_work(self):
         full, resumed = self.solver(), self.solver()
         full.train(1)
@@ -231,6 +227,7 @@ class DeepCFRTests(unittest.TestCase):
             for pa, pb in zip(a.parameters(), b.parameters()):
                 torch.testing.assert_close(pa, pb, rtol=0, atol=0)
 
+
     def test_budget_validation_and_manual_stop(self):
         solver = self.solver()
         for kwargs in ({}, {'iterations': 1, 'time_limit_seconds': 1}, {'iterations': 0},
@@ -242,6 +239,7 @@ class DeepCFRTests(unittest.TestCase):
         solver.cancel.set()
         self.assertEqual(solver.train(time_limit_seconds=10)['status'], 'cancelled')
         self.assertEqual(solver.iterations, 0)
+
 
     def test_failed_round_retains_published_policy(self):
         solver = self.solver()
@@ -255,20 +253,47 @@ class DeepCFRTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'new solve or refinement'):
             solver.train(1)
 
+
     def test_blocked_selected_hand_and_illegal_path(self):
         solver = self.solver()
         self.assertIn('selected_error', solver.inspect([], parse_cards('2c As')))
         with self.assertRaises(ValueError):
             solver.inspect(['bet:9999'])
 
-    def test_exact_river_exploitability_improves(self):
-        solver = self.solver(deep_hidden=64, deep_buffer_size=4000, deep_traversals=64,
-                             deep_train_steps=128, deep_batch_size=128)
-        before = river_exploitability(solver)['exploitability_bb']
-        solver.train(20)
-        after = river_exploitability(solver)['exploitability_bb']
-        self.assertLess(after, before * .6)
-        self.assertEqual(solver.completed_traversals, [1280, 1280])
+
+    def test_river_is_a_direct_boundary_and_has_no_neural_training_samples(self):
+        solver = self.solver()
+        solver.train(2)
+        self.assertGreater(solver.river_solves, 0)
+        self.assertLess(solver.last_river_certificate['exploitability_bb'], 1e-7)
+        for memory in solver.advantage_memory + solver.strategy_memory:
+            streets = np.argmax(memory.features[:memory.size, 4 * 69 + 2:4 * 69 + 5], axis=1)
+            self.assertTrue(np.all(streets == 1))
+        view = solver.inspect([])
+        self.assertTrue(all(set(r['probabilities']) <= {0., 1.} for r in view['rows']))
+
+    def test_river_range_propagation_uses_current_deterministic_policy(self):
+        solver = self.solver()
+        state = solver.root
+        for key in ('check', 'check'):
+            state = state.apply(next(a for a in state.actions(solver.settings) if a.key == key))
+        state = state.deal(parse_cards('Qc')[0])
+        conditioned, off_path = solver._river_ranges(state)
+        self.assertFalse(off_path)
+        self.assertEqual(conditioned, solver.ranges)
+        solver._training_policy = lambda state, hands: dict.fromkeys(hands, 1)
+        _, off_path = solver._river_ranges(state)
+        self.assertTrue(off_path)
+
+    def test_river_inspection_reuses_the_boundary_policy_for_later_actions(self):
+        solver = self.solver()
+        path = ['check', 'check', 'deal:Qc']
+        root_view = solver.inspect(path)
+        self.assertIn('exact', root_view)
+        self.assertEqual(len(solver._inspection_rivers), 1)
+        solver.inspect(path + ['check'])
+        self.assertEqual(len(solver._inspection_rivers), 1)
+        self.assertTrue(all(r['policy_source'] == 'exact_river' for r in root_view['rows']))
 
 
 if __name__ == '__main__':

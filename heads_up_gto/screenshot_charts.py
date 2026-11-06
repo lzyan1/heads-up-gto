@@ -194,21 +194,37 @@ def screenshot_chart():
                     actions[action].pop(hand)
         if removed:
             adjusted[history] = sorted(removed)
+    # Commit every observed hand to its most likely allowed action. Ties use
+    # fold, check, call, then increasing raise-to size, consistently across nodes.
+    for history, actions in nodes.items():
+        pure = {action: {} for action in actions}
+        hands = set().union(*(weights for weights in actions.values()))
+        def tie_order(action):
+            return ((0 if action == 'fold' else 1 if action == 'check' else 2 if action == 'call' else 3),
+                    float(action.split(':')[1]) if ':' in action else 0.)
+        order = sorted(actions, key=tie_order)
+        for hand in hands:
+            chosen = max(order, key=lambda action: actions[action].get(hand, 0.))
+            pure[chosen][hand] = 1.
+        nodes[history] = pure
     return {
         "version": 1,
-        "name": "GTO Wizard screenshots · rounded to 10%",
+        "name": "GTO Wizard screenshots · deterministic highest-probability actions",
         "is_demo": False,
         "approximate": True,
-        "frequency_step": 0.1,
+        "frequency_step": 1.0,
+        "policy_mode": "deterministic",
         "game": {"stack_bb": 100, "small_blind_bb": .5, "big_blind_bb": 1, "ante_bb": 0, "rake": 0},
         "provenance": {
             "source": "Seven user-supplied screenshots covering six decision charts; Cash 100bb, Heads-up cEV",
-            "method": "Visual estimates of conditional colored proportions, rounded in 10% steps with each visible cell normalized to 100%.",
+            "method": "Choose the highest-probability allowed action from each observed screenshot cell; output exactly 0 or 1.",
+            "source_frequency_step": 0.1,
+            "tie_break": "Fold, check, call, then increasing raise-to amount.",
             "reach": "Black space and colored bar height in Breakdown views indicate prior reach, not an additional fold probability. Prior reach is reconstructed from earlier nodes.",
             "caveat": "Approximate transcription, not an exact GTO Wizard export. Near rounding boundaries, either neighboring 10% step can be reasonable.",
             "kjs_open": "The darkened KJs cell in image 1 is treated as a selection shade for Raise 2.5: image 3 confirms full KJs reach after that action.",
             "all_in": "SB's 4-bet jam after 2.5 / 11.5 and BB's 5-bet jam after 2.5 / 11.5 / 26 are allowed. All-in 100 is raise:100 (total preflop contribution).",
-            "jam_restriction": "Opening jams and BB 3-bet jams are disabled. The original SB 4-bet jam mixes are restored. Any removed early-jam frequency is redistributed over remaining actions in tenths. This restricted transcription is not a fresh equilibrium solve.",
+            "jam_restriction": "Opening jams and BB 3-bet jams are disabled. Source SB 4-bet jam frequencies are retained before deterministic action selection. Any removed early-jam frequency is redistributed over remaining actions in tenths. Highest-probability selection can remove all reach from a previously mixed jam branch. This is not a fresh equilibrium solve.",
             "adjusted_hands": adjusted,
             "coverage": "The displayed 2.5 / 11.5 / 26 tree plus SB 4-bet and BB 5-bet all-in responses; no limp or alternative-size strategies are inferred.",
             "screenshots": sources,

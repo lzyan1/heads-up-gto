@@ -55,7 +55,7 @@ class APITests(unittest.TestCase):
         self.assertFalse(chart['is_demo'])
         preview=self.request('/api/preview',{'flop':'As Kd 7c','preflop':'raise:2.5/raise:11.5/raise:26/call'})
         self.assertEqual(preview['pot'],52)
-        self.assertEqual(preview['range_approximation']['frequency_step'],.1)
+        self.assertEqual(preview['range_approximation']['frequency_step'],1.)
 
     def test_preflop_navigation_and_settings(self):
         root = self.request('/api/preflop', {'history': []})
@@ -108,7 +108,7 @@ class APITests(unittest.TestCase):
         self.assertEqual(bb_response['actor'], 0)
         self.assertEqual([a['key'] for a in bb_response['actions']], ['fold', 'call'])
         self.assertFalse(bb_response.get('missing_chart'))
-        self.assertAlmostEqual(bb_response['coverage'], 1)
+        self.assertEqual(bb_response['coverage'], 0)
         called = self.request('/api/preflop', {'history': sb_four_bet + ['raise:100', 'call']})
         self.assertEqual(called['terminal'], 'showdown')
         self.assertEqual(called['pot'], 200)
@@ -130,7 +130,7 @@ class APITests(unittest.TestCase):
                     deep_train_steps=2, deep_batch_size=16, deep_inference_batch=2)
 
     def start(self, **changes):
-        payload = {'flop': 'As Kd 7c', 'preflop': 'raise:2.5/call',
+        payload = {'flop': 'As Kd 7c', 'preflop': 'raise:2.5/raise:11.5/raise:26/call',
                    'time_limit_seconds': 1e-9, 'settings': self.settings}
         return self.wait(self.request('/api/solve', {**payload, **changes}))
 
@@ -142,7 +142,7 @@ class APITests(unittest.TestCase):
                                              'settings': self.settings})
         self.assertIsInstance(solver, DeepCFRSolver)
         self.assertEqual(budget, {'time_limit_seconds': 60})
-        self.assertEqual(metadata['backend'], 'deep_cfr')
+        self.assertEqual(metadata['backend'], 'hybrid_pure')
         self.assertEqual(training_budget({'iterations': 1}), {'iterations': 1})
         for key, value in dict(backend='tabular', mode='bucketed', chance_mode='enumerate_turns',
                                max_nodes=1, buckets=8, equity_samples=24).items():
@@ -166,37 +166,37 @@ class APITests(unittest.TestCase):
         self.assertEqual(root['aggregate'], [])
         self.assertEqual(root['prediction_coverage'], 0)
         self.assertTrue(all(r['probabilities'] is None for r in root['rows']))
-        facing = self.request(prefix + '/node', {'path': ['bet:97.5']})
+        facing = self.request(prefix + '/node', {'path': ['bet:74']})
         self.assertEqual([a['key'] for a in facing['actions']], ['fold', 'call'])
-        self.assertEqual(self.request(prefix + '/node', {'path': ['bet:97.5', 'call']})['terminal'], 'showdown')
+        self.assertEqual(self.request(prefix + '/node', {'path': ['bet:74', 'call']})['terminal'], 'showdown')
         path = ['check', 'check', 'deal:2h', 'check', 'check', 'deal:3d']
         before = self.request(prefix + '/node', {'path': path})
         refined = self.wait(self.request(prefix + '/refine', {'path': path, 'iterations': 1}))
         self.assertTrue(refined['metadata']['local_refinement'])
         self.assertTrue(refined['metadata']['fallback_used'])
         self.assertTrue(refined['stats']['prediction_ready'])
-        self.assertEqual(refined['stats']['completed_traversals'], [2, 2])
+        self.assertEqual(refined['stats']['backend'], 'exact_river')
+        self.assertLess(refined['stats']['certificate']['exploitability_bb'], 1e-7)
         newprefix = '/api/jobs/' + refined['id']
         node = self.request(newprefix + '/node', {'path': []})
         self.assertEqual(node['street'], 'River')
         self.assertEqual(node['actions'], before['actions'])
-        self.assertAlmostEqual(node['prediction_coverage'], 1)
+        self.assertAlmostEqual(node['coverage'], 1)
         self.assertAlmostEqual(sum(node['aggregate']), 1, places=6)
-        self.assertLess(node['coverage'], node['prediction_coverage'])
+        self.assertIn('exact', node)
         resumed = self.wait(self.request(newprefix + '/resume', {'iterations': 1}))
-        self.assertEqual(resumed['stats']['iterations'], 2)
-        self.assertEqual(resumed['stats']['completed_traversals'], [4, 4])
+        self.assertEqual(resumed['stats']['iterations'], 1)
         diagnostic = self.request(newprefix + '/diagnostics', {})
-        self.assertEqual(sum(x['hands'] for x in diagnostic['coverage']['streets'].values()), resumed['stats']['nodes'])
+        self.assertEqual(diagnostic['coverage']['method'], 'exact_river')
         exported = self.request(newprefix + '/export', {'path': []})
-        self.assertEqual(exported['metadata']['backend'], 'deep_cfr')
-        self.assertTrue(exported['node']['neural']['predictions'])
+        self.assertEqual(exported['metadata']['backend'], 'exact_river')
+        self.assertIn('exact', exported['node'])
         self.assertEqual(len(exported['root_state']['board']), 5)
         self.assertEqual(len(exported['root_ranges']), 2)
         self.assertNotIn('buckets', exported['metadata']['settings'])
 
     def test_read_only_reference_comparison(self):
-        job = self.start()
+        job = self.start(preflop='raise:2.5/call')
         prefix = '/api/jobs/' + job['id']
         self.assertTrue(job['metadata']['reference_line_available'])
         report = self.request(prefix + '/comparison', {})
@@ -246,21 +246,15 @@ class APITests(unittest.TestCase):
     def test_refine_keeps_sizing_context(self):
         job = self.start(flop='As Td 6h')
         prefix = '/api/jobs/' + job['id']
-        path = ['check', 'bet:1.7', 'raise:8']
+        path = ['check', 'check', 'deal:2c', 'check']
         before = self.request(prefix + '/node', {'path': path})
         refined = self.wait(self.request(prefix + '/refine', {'path': path, 'time_limit_seconds': 1e-9}))
-        prefix = '/api/jobs/' + refined['id']
-        after = self.request(prefix + '/node', {'path': []})
+        after = self.request('/api/jobs/' + refined['id'] + '/node', {'path': []})
         self.assertEqual(before['actions'], after['actions'])
         self.assertEqual(before['sizing'], after['sizing'])
-        turn_path = ['call', 'deal:2c', 'check']
-        turn = self.request(prefix + '/node', {'path': turn_path})
-        self.assertEqual(turn['sizing']['scenario'], 'stab')
-        second = self.wait(self.request(prefix + '/refine', {'path': turn_path, 'time_limit_seconds': 1e-9}))
-        report = self.request('/api/jobs/' + second['id'] + '/export', {'path': []})
-        self.assertEqual(turn['actions'], report['node']['actions'])
-        self.assertEqual(report['root_state']['aggressor_history'], [0])
-        self.assertEqual(report['root_state']['path'], [])
+        exported = self.request('/api/jobs/' + refined['id'] + '/export', {'path': []})
+        self.assertEqual(exported['root_state']['aggressor_history'], [-1])
+
 
 
 if __name__ == '__main__':

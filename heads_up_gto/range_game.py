@@ -71,6 +71,9 @@ class RangeGame:
     def policy(self, state, hand):
         raise NotImplementedError("A neural average policy is required.")
 
+    def prepare_decision(self, state, ranges):
+        pass
+
     def prepare_policies(self, state, hands):
         raise NotImplementedError("A neural average policy is required.")
 
@@ -96,13 +99,14 @@ class RangeGame:
             action_index = list(actions).index(step)
             actor = state.actor
             updated = {}
+            self.prepare_decision(state, ranges)
             self.prepare_policies(state, ranges[actor])
             for hand, weight in ranges[actor].items():
                 probs, _, _ = self.policy(state, hand)
                 if probs is None:
-                    # Before a complete neural round, carry ranges forward
-                    # uniformly and disclose the missing average policy.
-                    probs = [1 / len(actions)] * len(actions)
+                    # The initialized deterministic policy chooses the first
+                    # legal action; never invent fractional propagation.
+                    probs = [1.] + [0.] * (len(actions) - 1)
                     uncertain += weight
                 if probs[action_index] > 0:
                     updated[hand] = weight * probs[action_index]
@@ -151,6 +155,7 @@ class RangeGame:
             card_mass[b] += w
         rows, aggregate = [], [0.0] * len(actions)
         total, covered = 0.0, 0.0
+        self.prepare_decision(state, ranges)
         self.prepare_policies(state, ranges[actor])
         for hand, weight in ranges[actor].items():
             mass = max(0, other_total - card_mass[hand[0]] - card_mass[hand[1]] + ranges[other].get(hand, 0))

@@ -13,6 +13,9 @@ class Settings:
     raise_multiplier: float = 3.0
     max_raises: int = 1
     include_all_in: bool = True
+    river_seconds: float = 120.
+    river_tolerance: float = 1e-7
+    river_cache_size: int = 8
     seed: int = 7
     deep_device: str = "cpu"
     deep_hidden: int = 128
@@ -33,6 +36,12 @@ class Settings:
         if "sizes" in data:
             data["sizes"] = tuple(tuple(sorted(set(float(x) for x in row))) for row in data["sizes"])
         obj = cls(**data)
+        for name in ('river_seconds', 'river_tolerance'):
+            value = getattr(obj, name)
+            if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+                raise ValueError(f'{name} must be positive and finite.')
+        if type(obj.river_cache_size) is not int or not 1 <= obj.river_cache_size <= 64:
+            raise ValueError('river_cache_size must be between 1 and 64.')
         if obj.deep_device not in ("cpu", "mps"):
             raise ValueError("Deep CFR device must be cpu or mps.")
         for name, lo, hi in (("deep_hidden", 32, 256), ("deep_buffer_size", 128, 100000),

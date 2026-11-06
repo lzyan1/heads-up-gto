@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "heads-up-gto"
-version = "0.2.0"
-description = "Local, experimental heads-up postflop Deep CFR study tool"
+version = "0.3.0"
+description = "Heads-up study with deterministic early streets and direct river equilibria"
 requires-python = ">=3.11"
-dependencies = ["numpy>=1.26,<3", "torch>=2.6,<3"]
+dependencies = ["numpy>=1.26,<3", "torch>=2.6,<3", "scipy>=1.11,<2"]
 
 [project.scripts]
 heads-up-gto = "heads_up_gto.server:main"

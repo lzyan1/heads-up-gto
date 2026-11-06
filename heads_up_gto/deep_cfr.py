@@ -1,16 +1,12 @@
-"""Small, memory-bounded Deep CFR pilot for a fixed postflop range game.
+"""Deterministic neural flop/turn training with direct mixed river boundaries.
 
-External sampling, alternating player updates, uniform reservoir replay and
-linear iteration weighting follow Brown et al. (ICML 2019). Advantage models
-are refitted from scratch. Separate strategy reservoirs/models approximate
-the reach-weighted average, not the last regret-matched policy.
-
-Traversal generators yield inference requests, allowing independent deals to
-share a neural batch. No hidden opponent cards or future cards enter features.
-The training coroutine survives Stop/time budgets so a partial round is resumed
-exactly; only complete rounds publish a new pair of average-policy models.
+Earlier-street sampled advantages train bounded replay models. All executed
+flop/turn policies select one action. River policies and continuation values
+come from range-conditioned sequence-form LPs, never neural regret matching.
+This restricted hybrid algorithm has no full-game equilibrium certificate.
 """
 from dataclasses import dataclass
+from collections import OrderedDict
 import math
 import random
 import time
@@ -20,9 +16,11 @@ import numpy as np
 import torch
 from torch import nn
 
-from .cards import score
+from .cards import score, remove_blocked
 from .game import Settings
 from .range_game import RangeGame
+from .river_jobs import RiverJob, RiverExecutor
+from .river_only import exact_view
 
 MAX_ACTIONS = 5
 MAX_HISTORY = 32
@@ -113,14 +111,11 @@ class Network(nn.Module):
         return self.layers(features)
 
 
-def regret_match(values):
-    positive = np.maximum(values, 0)
-    total = float(positive.sum())
-    if total > 0:
-        return positive / total
-    # Paper's highest-advantage fallback. Ties are symmetric, including round 1.
-    best = values == values.max()
-    return best.astype(np.float32) / best.sum()
+def greedy_policy(values):
+    """One deterministic action; stable ties choose the first legal action."""
+    result = np.zeros(len(values), dtype=np.float32)
+    result[int(np.argmax(values))] = 1.
+    return result
 
 
 def weighted_loss(predictions, targets, masks, rounds, iteration, strategy=False):
@@ -136,12 +131,19 @@ class SampleCounts:
     averages: int = 0
 
 
+@dataclass
+class RiverRequest:
+    state: object
+    player: int
+    hand: tuple
+
+
 class DeepCFRSolver(RangeGame):
     def __init__(self, root, ranges, settings):
         Settings.from_dict(vars(settings))
-        if (root.street not in (0, 1, 2) or len(root.board) != root.street + 3
+        if (root.street not in (0, 1) or len(root.board) != root.street + 3
                 or root.pending or root.terminal):
-            raise ValueError("Deep CFR starts at an active flop, turn or river decision.")
+            raise ValueError("Neural training starts at an active flop or turn; rivers use direct solving.")
         super().__init__(root, ranges, settings)
         if settings.deep_device == "mps" and not torch.backends.mps.is_available():
             raise ValueError("MPS is unavailable in this Python environment. Choose CPU or install an MPS-enabled PyTorch build.")
@@ -170,6 +172,15 @@ class DeepCFRSolver(RangeGame):
         self._work = None
         self._failed = False
         self._policy_cache = {}
+        self._river_cache = OrderedDict()
+        self._inspection_rivers = OrderedDict()
+        self._river_executor = RiverExecutor()
+        self._river_job = None
+        self._river_job_key = None
+        self.river_solves = self.river_cache_hits = self.river_off_path_solves = 0
+        self.river_seconds = 0.
+        self.last_river_certificate = None
+        self.river_active = False
 
     def _encode(self, state, hand, actions):
         return encode(state, hand, actions, self.scale)
@@ -199,6 +210,9 @@ class DeepCFRSolver(RangeGame):
         if state.pending:
             return (yield from self._traverse(state.deal(runout[len(state.board)]), hands, runout,
                                               winner, traverser, iteration))
+        if state.street == 2:
+            value = yield RiverRequest(state, traverser, hands[traverser])
+            return value / self.scale
         actions = state.actions(self.settings)
         features = self._encode(state, hands[state.actor], actions)
         probabilities = yield (state.actor, features, len(actions))
@@ -221,6 +235,7 @@ class DeepCFRSolver(RangeGame):
                                           traverser, iteration))
 
     def _collect(self, player, iteration):
+        self._river_cache.clear()  # policies change only between player phases
         remaining = self.settings.deep_traversals
         active = []
         while remaining or active:
@@ -231,7 +246,7 @@ class DeepCFRSolver(RangeGame):
                 remaining -= 1
             predictions = [None] * len(active)
             for actor in (0, 1):
-                indices = [i for i, (_, request) in enumerate(active) if request[0] == actor]
+                indices = [i for i, (_, request) in enumerate(active) if not isinstance(request, RiverRequest) and request[0] == actor]
                 if not indices:
                     continue
                 model = self.advantages[actor]
@@ -242,9 +257,11 @@ class DeepCFRSolver(RangeGame):
                     with torch.inference_mode():
                         values = model(torch.from_numpy(features).to(self.device)).cpu().numpy()
                 for row, index in enumerate(indices):
-                    predictions[index] = regret_match(values[row, :active[index][1][2]])
+                    predictions[index] = greedy_policy(values[row, :active[index][1][2]])
             pending = []
-            for (traversal, _), probabilities in zip(active, predictions):
+            for (traversal, request), probabilities in zip(active, predictions):
+                if isinstance(request, RiverRequest):
+                    probabilities = yield from self._river_value(request)
                 try:
                     pending.append((traversal, traversal.send(probabilities)))
                 except StopIteration:
@@ -252,6 +269,94 @@ class DeepCFRSolver(RangeGame):
                     self.phase_step += 1
             active = pending
             yield
+
+    def _training_policy(self, state, hands):
+        actions = state.actions(self.settings)
+        model = self.advantages[state.actor]
+        hands = list(hands)
+        result = []
+        for start in range(0, len(hands), 256):
+            batch = hands[start:start + 256]
+            if model is None:
+                result.extend([0] * len(batch))
+            else:
+                features = np.stack([self._encode(state, h, actions) for h in batch])
+                with torch.inference_mode():
+                    values = model(torch.from_numpy(features).to(self.device))[:, :len(actions)]
+                    result.extend(values.argmax(dim=1).cpu().tolist())
+        return dict(zip(hands, result))
+
+    def _river_ranges(self, target):
+        state = self.root
+        ranges = [dict(r) for r in self.ranges]
+        off_path = False
+        for step in target.path:
+            if step == '/':
+                state = state.deal(target.board[len(state.board)])
+                ranges = [remove_blocked(r, state.board) for r in ranges]
+                continue
+            actions = state.actions(self.settings)
+            index = next(i for i, a in enumerate(actions) if a.key == step)
+            actor = state.actor
+            policy = self._training_policy(state, ranges[actor])
+            updated = {h: w for h, w in ranges[actor].items() if policy[h] == index}
+            if updated:
+                ranges[actor] = updated
+            else:
+                # Traversals test deviations even when a deterministic action has
+                # zero reach for every hand. Beliefs there are undefined: retain
+                # the preceding range for this counterfactual only and disclose it.
+                off_path = True
+            state = state.apply(actions[index])
+        return tuple(ranges), off_path
+
+    def _river_value(self, request):
+        state = request.state
+        key = (state.path, state.board)
+        result = self._river_cache.get(key)
+        if result is None:
+            if self._river_job is None:
+                ranges, off_path = self._river_ranges(state)
+                self._river_job = RiverJob(state, ranges, self.settings, executor=self._river_executor)
+                self._river_job_key = key
+                self.river_off_path_solves += int(off_path)
+            if key != self._river_job_key:
+                raise RuntimeError('A river traversal resumed with mismatched public state.')
+            self.river_active = True
+            while result is None:
+                result = self._river_job.poll()
+                if result is None:
+                    yield
+            self.river_active = False
+            self._river_job = self._river_job_key = None
+            self.river_solves += 1
+            self.river_seconds += result.stats['total_seconds']
+            self.last_river_certificate = result.stats
+            self._river_cache[key] = result
+            while len(self._river_cache) > self.settings.river_cache_size:
+                self._river_cache.popitem(last=False)
+        else:
+            self.river_cache_hits += 1
+            self._river_cache.move_to_end(key)
+        return result.value_for_hand(request.player, request.hand)
+
+    def _inspection_result(self, state):
+        for result in reversed(self._inspection_rivers.values()):
+            if state.board == result.root.board and state.path in result.nodes:
+                return result
+        return None
+
+    def prepare_decision(self, state, ranges):
+        if state.street != 2 or state.pending or state.terminal or any(not r for r in ranges):
+            return
+        key = (state.path, state.board)
+        if self._inspection_result(state) is None:
+            from .exact_river import ExactRiver
+            result = ExactRiver(state, ranges, self.settings).solve(
+                time_limit_seconds=self.settings.river_seconds, tolerance=self.settings.river_tolerance).compact()
+            self._inspection_rivers[key] = result
+            while len(self._inspection_rivers) > self.settings.river_cache_size:
+                self._inspection_rivers.popitem(last=False)
 
     def _new_network(self, seed):
         # Initialize on CPU with an isolated RNG; no dropout/GPU randomness.
@@ -300,6 +405,7 @@ class DeepCFRSolver(RangeGame):
                 averages.append((yield from self._fit(self.strategy_memory[player], iteration, player, strategy=True)))
             self.average_models = averages
             self._policy_cache.clear()
+            self._inspection_rivers.clear()
             self.iterations += 1
             self.phase, self.phase_step, self.phase_total = "round_complete", 0, 0
             yield
@@ -343,6 +449,9 @@ class DeepCFRSolver(RangeGame):
             self._failed = True
             raise
         finally:
+            if self._river_job is not None:
+                self._river_job.pause()
+            self._river_executor.pause()
             self.run_elapsed = time.monotonic() - start
             self.elapsed = previous + self.run_elapsed
             torch.set_num_threads(previous_threads)
@@ -356,17 +465,23 @@ class DeepCFRSolver(RangeGame):
                 "attempted_iterations": self.attempted_iterations,
                 "completed_traversals": list(self.completed_traversals), "tree_visits": self._visits,
                 "exploitability": None, "backend": "deep_cfr", "device": str(self.device),
-                "policy_update": "alternating_deep_cfr", "iteration_unit": "neural rounds",
-                "phase": self.phase, "phase_step": self.phase_step, "phase_total": self.phase_total,
+                "policy_update": "alternating_deterministic", "iteration_unit": "neural rounds",
+                "phase": "river_lp" if self.river_active else self.phase, "phase_step": self.phase_step, "phase_total": self.phase_total,
                 "pending_round": self.attempted_iterations > self.iterations,
                 "prediction_ready": all(m is not None for m in self.average_models),
                 "tracking_limit": TRACKING_LIMIT, "tracking_saturated": self.tracking_saturated,
                 "replay_capacity_bytes": sum(m.nbytes for m in memories),
                 "replay": [{"size": m.size, "capacity": m.capacity, "seen": m.seen} for m in memories],
-                "losses": dict(self.losses)}
+                "losses": dict(self.losses), "policy_mode": "deterministic_flop_turn",
+                "river_method": "sequence_form_lp", "river_solves": self.river_solves,
+                "river_cache_hits": self.river_cache_hits, "river_seconds": self.river_seconds,
+                "river_off_path_solves": self.river_off_path_solves,
+                "last_river_certificate": self.last_river_certificate}
 
     def _predict(self, state, hands):
         """Batch inspection/range propagation too, not just training traversal."""
+        if state.street == 2:
+            return
         actions = state.actions(self.settings)
         model = self.average_models[state.actor]
         if model is None or not actions:
@@ -377,13 +492,16 @@ class DeepCFRSolver(RangeGame):
             features = np.stack([self._encode(state, h, actions) for h in batch])
             with torch.inference_mode():
                 logits = model(torch.from_numpy(features).to(self.device))[:, :len(actions)]
-                probabilities = torch.softmax(logits, dim=1).cpu().numpy()
+                probabilities = torch.nn.functional.one_hot(logits.argmax(dim=1), num_classes=len(actions)).cpu().numpy()
             if len(self._policy_cache) + len(batch) > 4096:
                 self._policy_cache.clear()
             for hand, probs in zip(batch, probabilities):
                 self._policy_cache[self.info_key(state, hand)] = probs.tolist()
 
     def policy(self, state, hand):
+        if state.street == 2:
+            result = self._inspection_result(state)
+            return result.policy(state, hand) if result else (None, 0, 0)
         self._predict(state, [hand])
         key = self.info_key(state, hand)
         counts = self.nodes.get(key, SampleCounts())
@@ -395,6 +513,11 @@ class DeepCFRSolver(RangeGame):
 
     def inspect(self, path, selected=None):
         response = super().inspect(path, selected)
+        state, ranges, _ = self.locate(path)
+        if state.street == 2:
+            result = self._inspection_result(state)
+            response['unreachable'] = any(not r for r in ranges)
+            return exact_view(response, result) if result else response
         response["prediction_coverage"] = response["coverage"]
         response["coverage"] = sum(row["mass"] for row in response["rows"] if row["updates"] and row["averages"])
         response["neural"] = {"predictions": True, "tracking_saturated": self.tracking_saturated,

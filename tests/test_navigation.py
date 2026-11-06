@@ -58,12 +58,9 @@ class PreflopNavigationTests(unittest.TestCase):
 
     def test_conditioning_applied_once(self):
         result = preflop_view(['raise:2.5', 'raise:11.5', 'raise:26'], self.chart)
-        a8 = [r for r in result['rows'] if r['class'] == 'A8s']
-        self.assertEqual(len(a8), 4)
-        call_index = [a['key'] for a in result['actions']].index('call')
-        for row in a8:
-            self.assertAlmostEqual(row['weight'], .3)
-            self.assertEqual(row['probabilities'][call_index], 1)
+        self.assertTrue(all(row['weight'] == 1 for row in result['rows']))
+        self.assertTrue(all(sum(row['probabilities']) == 1 for row in result['rows']))
+        self.assertFalse(any(row['class'] == 'A8s' for row in result['rows']))
 
     def test_incomplete_import_has_no_invented_probability(self):
         chart = screenshot_chart()
