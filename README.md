@@ -1,35 +1,66 @@
-# Heads up — postflop study
+# Heads up — Deep CFR study
 
-A local Python application for 100 BB heads-up no-limit hold'em: use the hardcoded GTO Wizard preflop charts, select a flop, and explore the remaining betting decisions. Displays a 13×13 range grid, exact-combo selection, mixed action frequencies, and per-decision training counts.
+A local Python application for 100 BB heads-up no-limit hold’em. Follow the fixed
+GTO Wizard preflop charts, select a flop, and study the learned strategy across
+flop, turn and river. The browser shows a 13×13 range grid, individual suit
+combinations, mixed action frequencies, and direct sample counts.
 
-**This is an experimental approximate solver, not a certified GTO policy.** It implements the chart-conditioned postflop part of the proposed architecture. Preflop frequencies remain fixed. It does not implement a full-game preflop optimization loop or safe subgame solving.
+**Deep CFR is the only training method.** It learns from exact cards and betting
+history using neural advantage and average-policy networks. This is an
+experimental approximate solver, not a certified GTO policy. Preflop charts
+remain fixed; there is no full-game preflop optimization or safe subgame solving.
 
-## Run
+## Install and run
 
-Requires Python 3.11+. The tabular backend has no runtime dependencies and works offline.
-Deep CFR is optional; install its dependencies once with `.venv/bin/python -m pip install '.[deep]'`.
+Requires Python 3.11+, NumPy and PyTorch. Both libraries are required dependencies
+and are installed with the project:
 
 ```sh
+python3 -m venv .venv                 # only if this checkout has no environment
+.venv/bin/python -m pip install -e .
 .venv/bin/python run.py --open
 ```
 
-Or double-click `run.command` on macOS. The interface is at http://127.0.0.1:8000. Stop the server with Control-C. Choose another port with `--port 8001`. The server binds only to loopback and is not intended for hosting.
+Or double-click `run.command` on macOS after installing. The interface opens at
+http://127.0.0.1:8000. Stop with Control-C; use `--port 8001` for another port.
+The server binds only to loopback, and training works offline after installation.
 
 ## Workflow
 
-1. The workspace opens at the SB's first preflop decision, using your six GTO Wizard decision charts rounded to 10% steps. Pick an action in the **horizontal history strip** or the action cards on the right. Each choice adds the next player's decision, with remaining stacks and pot size.
-2. When a call or check closes preflop, a **card-picker popup** opens. Select three flop cards from the four suit rows and choose **Solve continuation**. Clear, shuffle, and deselect controls are included. Closing the popup leaves a “Choose flop” tile so you can return later.
-3. Follow postflop actions using the same strip. When betting ends, choose a turn or river card in the popup. Cards already on the board are disabled. A fold, called all-in, or completed river ends the line without asking for another betting street.
-4. **Hover over the 13×13 grid** to see every suit combination and its action frequencies on the right. Click a hand to pin it, click again or use Unpin to release it. Keyboard focus and arrow keys also inspect hands. Blocked, absent, and untrained combinations are labeled explicitly.
-5. Click a prior decision's **SB/BB heading** to inspect it while keeping the later line visible. Selecting a different action replaces the later branch. Click a board tile to edit it; changing a turn/river discards subsequent actions, and changing the flop starts a new solve.
-6. **Strategy** colors each hand by its conditional action mix. **Ranges** shows reach by bar height. **Breakdown** combines reach height with action colors, like the supplied screenshots. Green means check/call, blue means fold, and reds mean bets/raises, with dark red for all-in.
-7. **Settings** uses the hardcoded GTO Wizard charts exclusively. Chart import, demo selection, and manual ranges have been removed from the app. All streets offer one scenario-based bet or raise size plus an all-in whenever legal; sizes change with the pot type, position, betting history, board and effective stacks. Settings offers an iteration count or a time limit (seconds), plus card model, strength buckets, equity samples, random seed and an optional decision limit. Load a specific spot and Download charts are also available; custom bet-sizing inputs stay removed. It remains available during training; the header stays visible when scrolling.
-8. **Train more** continues the same solver with a fresh iteration or time budget, preserving its card model and seed. A changed optional decision limit takes effect on the resumed run. **Refine decision** starts a local solve at the displayed board/action state using conditioned ranges and the saved settings. Earlier actions stay in the strip; the previous solve remains navigable while retained in memory. Refinement is useful when deeper branches are untrained. It is not a safe re-solve and has no full-game exploitability guarantee. Uniform propagation through untrained earlier decisions is explicitly disclosed.
-9. **Export** saves the displayed decision as JSON, including configuration, root state, root ranges, training statistics, and combo probabilities. Live solver state is in memory; restarting the app discards it. Only the two most recent solves are retained. Older decisions in a refined history are disabled once their solve expires.
+1. Follow SB/BB preflop actions in the horizontal history strip. The six supplied
+   GTO Wizard charts, rounded to 10%, are the only preflop source.
+2. After a closing call, choose three flop cards and **Solve continuation**.
+   A flop-root solve trains all three streets together with sampled future cards.
+3. Follow postflop actions and choose turn/river cards to inspect the same learned
+   average strategy. Revisiting a decision preserves later actions; choosing a
+   different action or card replaces the later branch.
+4. Hover over the range grid to inspect exact suit combinations. Click to pin a
+   hand; arrow keys also navigate. **Strategy** shows conditional action mixes,
+   **Ranges** shows reach by bar height, and **Breakdown** combines both.
+5. **Settings** offers a time limit (60 seconds by default) or a number of neural
+   rounds, plus CPU/Apple GPU, network width, replay capacity, training steps,
+   batch sizes and seed. Settings apply to new solves and refinements.
+6. **Train more** preserves the existing networks, replay buffers, random states
+   and optimizer work. Stop/time budgets pause between traversal batches or
+   optimizer steps, including within a round. Predictions first appear after
+   a complete round; later pauses preserve the last completed average strategy.
+7. **Refine decision** starts a separate local solve using conditioned ranges and
+   the current settings. Before a complete policy exists, uniform propagation is
+   disclosed. Refinement is not safe subgame solving.
+8. **Export** saves displayed strategies, configuration, root state/ranges and
+   diagnostics as JSON. It does not save a resumable neural checkpoint. Training
+   lives in memory and restarting loses it. Only the two most recent solves are
+   retained; expired older decisions in a refined history become unavailable.
 
-The cards use `s` ♠, `h` ♥, `d` ♦, and `c` ♣. All recommendations are for the **player currently to act**, not a fixed hero seat. Raises are total amounts in BB. For example, `raise:2.5 / raise:11.5 / call` means SB raises to 2.5, BB raises to 11.5, and SB calls.
+Green is check/call, blue is fold, reds are bets/raises, and dark red is all-in.
+Recommendations apply to the current acting player. Raises are total street
+amounts in BB. Cards use `s` ♠, `h` ♥, `d` ♦ and `c` ♣.
 
-For tabular training, coverage means the fraction of compatible range mass with both regret updates and average-strategy samples, not convergence. Combo tooltips include training counts. Missing chart frequencies and untrained tabular decisions have no invented recommendation. Tabular action averages exclude unknown mass. Deep CFR displays model predictions separately from directly sampled coverage; its action averages include predicted unseen hands. Neither backend is a certified GTO solver.
+Neural predictions include unseen hands. **Direct samples** measures compatible
+range mass with both advantage and average-policy visits; it is separate from
+prediction availability and does not measure accuracy or convergence. Once the
+50,000-state visit tracker fills, counts/coverage are lower bounds. Replay
+sampling and neural learning continue normally.
 
 ## Postflop action abstraction
 
@@ -96,214 +127,53 @@ The screenshot presets are single-raised (5 BB pot / 97.5 BB behind), three-bet 
 
 The server accepts only the hardcoded source. Legacy demo/import/manual API requests are rejected rather than silently ignored. Generic chart utilities and the synthetic example remain as internal test fixtures, not selectable application modes.
 
-## Solver design and limits
+## Training and API
 
-- External-sampling Monte Carlo CFR: sample a legal private deal and a complete runout; enumerate the traverser's actions and sample the opponent's actions from its current strategy. Alternate updates for both players. At sampled opponent nodes, accumulate the average policy. Regret matching uses positive cumulative regrets; negative regrets are retained (vanilla MCCFR, not CFR+).
-- Zero-sum terminal utilities include half the initial pot plus the opponent's subsequent investment on a win, and minus half the initial pot minus the player's investment on a loss. Ties split the pot. Betting legality and chip conservation are tested.
-- **Strength buckets (default):** deterministic sampled showdown equity against the input opponent range assigns each hand to one of 8 buckets. Later public boards are grouped by rank multiplicities, maximum suit count, presence of a new highest rank, and the texture features used by the sizing model. Information-set keys retain the whole history of private buckets, public observations, and actions. No hidden opponent card or future community card enters a strategy key. This defines a coarse perfect-recall observation game; it loses strategically important blocker and board information. It is intentionally a prototype abstraction, not a production poker abstraction.
-- **Exact cards:** keys contain the actual hole cards and visible board. This removes card bucketing but retains the action abstraction and Monte Carlo training error. Broad three-street ranges require far more samples and memory. Choose Strength buckets or Exact cards in Settings. Exact mode is most useful for narrow ranges or refined river spots.
-- All-in and showdown values use the actual sampled cards and exact hand evaluator in both modes. There is no heuristic terminal payoff or artificial reveal of the runout.
-- Strength estimates use the fixed root opponent range, not an adaptively recomputed range at each future action. They are fixed features of the abstraction, not values used to replace terminal utilities.
-- Iteration counts, node counts, and visited range mass are diagnostics, not exploitability bounds. Full three-street exploitability is not computed. `diagnostics.river_exploitability` evaluates exact best responses for small exact-card river games (at most 400 legal hand pairs), and is used in the convergence test.
-- The optional decision limit is blank (unlimited) by default for new solves and refinements. A chosen limit stops with partial results; clear or increase it before Train more to continue. Physical RAM is finite; a catchable Python memory exhaustion retains partial results, but operating-system termination cannot be prevented. An interrupted traversal may leave partial updates.
-- Training can stop after an iteration count or a wall-clock time limit. Timed training finishes both players’ traversals of the current iteration before stopping, so it can slightly exceed the requested duration. Preparation and displaying the range are outside the training timer. Every solve, refinement or resumed run gets a fresh budget; cumulative training time and iterations are retained. The API accepts either `iterations` (integer, at least 10) or `time_limit_seconds` (positive finite number), never both. Progress includes per-run `run_seconds`, cumulative `seconds`, and `time_limit_seconds`; a timed run has no iteration `target`. Stop remains available in either mode.
-- Local re-solves condition on the existing policy; they do not preserve opponent counterfactual-value guarantees and can change earlier strategic incentives. Preflop chart quality, abstraction error, sampling error, and subgame consistency all remain material limitations.
+The API accepts either `time_limit_seconds` (positive finite seconds) or
+`iterations` (a positive integer counting complete neural rounds), never both.
+Omitting both selects 60 seconds. Each solve/refinement/resume gets a fresh
+budget; `seconds` and completed rounds are cumulative, while `run_seconds`
+measures the current run. A time budget can overrun by the current batch or
+optimizer step, plus device initialization. Preparation and range inspection
+are outside the training timer.
 
-The next research step toward the original full-game proposal would be a preflop optimization loop with range-dependent per-hand continuation values, principled safe subgame boundaries, and exploitability evaluation. This application provides the local engine, chart boundary, and study UI; it does not claim that final step is complete.
-
-## Test
-
-```sh
-.venv/bin/python -m unittest discover -s tests -v
-node --test tests/test_ui.mjs
+```json
+{
+  "flop": "As Kd 7c",
+  "preflop": "raise:2.5/call",
+  "time_limit_seconds": 60,
+  "settings": {"deep_device": "cpu", "seed": 7}
+}
 ```
 
-Node is only needed for the browser-model tests; it is not a runtime dependency.
+Send this to `POST /api/solve`; inspect progress at `GET /api/jobs/<id>`.
+Use `POST /api/jobs/<id>/node` with `{"path": []}` to inspect the root after
+training stops. Paths contain action keys and `deal:2h` board selections.
+`resume`, `stop`, `refine`, `export`, `comparison`, and `diagnostics` are also
+job endpoints. Settings use only neural and internal betting-tree fields;
+removed backend, bucketing, turn-enumeration and decision-limit settings are
+rejected rather than silently changing the solve. `resume` preserves settings.
 
-Tests cover 5–7 card evaluation including wheel/full-house edge cases; range expansion; chart multiplication; illegal preflop lines; scenario sizing on all streets, board-dependent menus, public information-set separation, and refinement continuity; minimum raises, all-ins and stack conservation; blocker-correct joint sampling; deterministic resumed training; no fabricated untrained recommendations; and measured exploitability improvement in a small exact river game.
+`POST /api/jobs/<id>/diagnostics` summarizes bounded visit counters by street;
+node inspection includes unseen compatible hands and sample distributions.
+The descriptive 200-sample threshold is a visibility aid, not a confidence bound.
+No full-game exploitability is computed. `diagnostics.river_exploitability`
+evaluates exact best responses for small river fixtures (at most 400 legal hand
+pairs). Zero-sum terminal utilities use exact sampled cards and hand evaluation.
 
-## Code map
+A failed neural round retains the previously published average strategy but
+requires a new solve or refinement to train again. Buffers are bounded, but
+networks, evaluator caches, retained solves and process overhead also use RAM.
+Local refinement does not preserve opponent counterfactual-value guarantees.
+Preflop transcription, action restrictions, sampling and function approximation
+all limit the result. The app does not connect to a poker client.
 
-- `heads_up_gto/cards.py`: cards, ranges and evaluator.
-- `heads_up_gto/preflop.py`: preflop action reconstruction and chart validation.
-- `heads_up_gto/screenshot_charts.py`: six hardcoded user-supplied decision charts in 10% steps.
-- `heads_up_gto/sizing.py`: scenario and board-dependent postflop sizing model, with an additional legal all-in.
-- `heads_up_gto/navigation.py`: partial preflop decisions, chart-conditioned grids, and action history.
-- `heads_up_gto/game.py`: immutable betting state and legal abstract actions.
-- `heads_up_gto/solver.py`: MCCFR, card abstraction, range conditioning, inspection.
-- `heads_up_gto/diagnostics.py`: small-river exact best-response diagnostic.
-- `heads_up_gto/server.py`: loopback HTTP API and one active background solve.
-- `heads_up_gto/static/`: responsive browser UI; no remote assets or scripts.
-
-Research references: [Lanctot et al., Monte Carlo Sampling for Regret Minimization in Extensive Games](https://proceedings.neurips.cc/paper_files/paper/2009/hash/00411460f7c92d2124a67ea0f4cb5f85-Abstract.html); [Brown and Sandholm, Safe and Nested Subgame Solving](https://arxiv.org/abs/1705.02955). Safe subgame solving is a reference for future work, not a feature currently implemented.
-
-## Coverage diagnostics (exact-hand investigations)
-
-The displayed percentage is the compatible conditional range mass with **both**
-regret updates and average-policy samples. It is not a convergence percentage.
-The decision panel reports unseen, regret-only, average-only, and low-sample hands;
-individual combinations show both counters. The threshold of 200 of each is a
-rough visibility aid, not a statistical confidence bound. Action totals still
-exclude hands without a displayed policy, so sparse coverage can distort totals.
-
-`POST /api/jobs/<id>/diagnostics` with `{}` returns stored-node sample distributions
-by street after training stops. This excludes unseen information sets; use
-`POST /api/jobs/<id>/node` to include unseen compatible hands at a selected path.
-The latter includes `training.counts`, conditional `training.mass`, and min,
-median, p90, max and total for regret updates and average samples. Under bucketed
-mode, several hand rows can share the same underlying counters.
-
-Training statistics distinguish requested target, completed iterations, attempted
-iterations, completed traversals by player, interrupted iterations, tree visits,
-and the node cap. `partial_updates_possible` means an interrupted attempt may
-have left updates behind; it does not imply all attempts were rolled back.
-Timed runs finish both traversals; stop, node-limit and memory failures can
-interrupt them. Resuming repeatedly into the same node cap is not useful.
-
-To reproduce the 130,000-iteration fixed-flop exact-hand experiment (can consume
-substantial memory for millions of nodes), run from the project directory:
-
-```sh
-PYTHONPATH=. python3 benchmarks/coverage.py --output coverage-results.json
-python3 -m unittest discover -s tests -q
-node --test tests/test_ui.mjs
-```
-
-The diagnostic tests exercise the production `_walk` on Kuhn poker, compare it
-against all pure best responses, and check exact river best responses with
-all-ins enabled. These validate small games, not full Hold'em exploitability.
-For focused turn study, use the existing Refine action after selecting a board.
-This concentrates samples on that decision but relies on inherited approximate
-ranges and is not safe full-game equilibrium refinement. Large bets and all-ins
-remain available; no hand bucketing is needed for exact mode.
-
-## Experimental enumeration of turn cards
-
-In Settings, select **Board sampling → Enumerate every turn · experimental**.
-This automatically selects exact cards. For the comparison spot, load flop
-`As Td 6h` with preflop history `raise:2.5/raise:11.5/call` (23 BB pot,
-88.5 BB remaining per player). Choose a time limit when comparing approaches:
-one enumerated iteration does much more work than a sampled iteration.
-
-API setting: `{"mode":"exact","chance_mode":"enumerate_turns"}`. The default
-`chance_mode` remains `sampled`. Resuming preserves the original traversal mode;
-start a new solve to compare modes. The existing all-in and large-bet options
-are unchanged. New solve metadata and statistics include `chance_mode`;
-`enumerated_turns` counts the runouts prepared across sampled hand pairs.
-
-Each iteration still samples a compatible private-hand pair. It prepares all
-45 legal turn cards and one uniformly sampled river from the 44 remaining
-cards for each turn. Both traversals reuse this bank. When betting advances
-from flop to turn, all turn branches are visited and their utilities are
-averaged. Descendant regret and average-policy sums receive the corresponding
-1/45 chance weight; visit counts still count actual visits. Flop all-in
-showdowns also average over this bank. No unobserved river enters a turn key.
-If the solve starts on the turn or river, normal runout sampling applies.
-This is **turn enumeration**, not full game-tree or 1,980-runout enumeration:
-opponent actions, private hands and rivers remain sampled.
-
-The experiment can spend less time on distinct private hands and repeated
-regret updates. Broader board coverage need not mean better convergence, and
-raw iteration counts are not comparable. Node-budget interruption remains
-possible and is disclosed by the diagnostics.
-
-Reproduce the equal-time experiment from the project directory:
-
-```sh
-PYTHONPATH=. python3 benchmarks/turn_sampling.py --seconds 60 --seeds 7 23 --output turn-sampling-results.json
-```
-
-The benchmark uses a two-million-node guard per run (override with `--max-nodes`,
-where 0 means unlimited). It records actual completed work, full decision rows,
-coverage, per-street sample distributions and configuration. A capped run is
-not an equal-time comparison. Small tests cover all 45 legal turns, blockers,
-conditional showdown winners, 1/45 weighting, early all-in evaluation, resume,
-and API export. Existing Kuhn and river convergence tests remain in the suite.
-
-The observed GTO Wizard solution uses a 12.1 BB flop bet and no immediate shove
-at its root. This app's three-bet-pot profile uses 7.6 BB plus an 88.5 BB shove
-on this flop; preflop frequencies are rounded. Treat Wizard frequencies as a
-qualitative reference, not an exact numerical convergence target for this tree.
-
-## Shared-deal update-order fix
-
-Both player traversals reuse a sampled deal. Their policies must therefore stay
-fixed for that entire iteration. The solver now caches the pre-update strategy
-at every visited information set and releases the cache after both traversals,
-or on interruption. Regret and average accumulators can be updated in place,
-but those changes do not affect actions until the next iteration.
-
-Previously player 1's traversal could respond to a player 0 strategy just
-updated from the same hidden hands/runout. This biases the sampling estimator,
-particularly at sparsely visited information sets. A regression game with an
-unobserved fair coin gives an exact first-iteration expected call-regret
-increment of +0.25 under the uniform profile; the old ordering gives 0, and
-frozen policies restore +0.25. Existing Kuhn and river tests alone did not catch
-this early-iteration bias.
-
-Stats label corrected runs with `policy_update: simultaneous_frozen`. Start a
-fresh solve after restarting the server; old strategy accumulators were produced
-by the previous update order. This fix does not certify full Hold'em convergence
-or make this action menu equivalent to GTO Wizard's. All-in actions remain.
-
-`benchmarks/policy_freeze.py` reproduces a short equal-time comparison against
-the legacy update order. Its near-pure frequency counts compare current regret
-matching with the displayed historical average; a more nearly pure current
-strategy is not automatically a better strategy. Mixed averages alone do not
-prove that a solver is wrong.
-
-## Deep CFR pilot for a 16 GB Apple Silicon Mac
-
-The optional `deep_cfr` backend learns across exact-card states instead of allocating
-an independent regret table for every combination. It supports a **fixed flop,
-turn or river root with fixed input ranges**. A flop-root solve trains all three
-streets together, sampling private hands, opponent actions and future board cards.
-It retains the existing fixed scenario sizes and all-in menu; it does not solve
-unrestricted no-limit Hold'em or certify unseen predictions.
-The tabular backend remains the default.
-
-### Install and use
-
-```sh
-python3 -m venv .venv                 # only if this checkout has no environment
-.venv/bin/python -m pip install '.[deep]'
-.venv/bin/python run.py --open
-```
-
-1. In **Settings → Training method**, select **Deep CFR · flop / turn / river**.
-   Selecting it switches the budget control to a time limit. Set your budget and
-   save settings; this does not start training or convert an existing solve.
-2. Start a new hand, follow preflop, and choose the flop. **Solve continuation**
-   starts Deep CFR directly from that flop. Alternatively, enter the preflop line
-   and board under **Load a specific spot**, then choose **Load spot & solve**.
-3. Navigate to any turn/river afterward to inspect the same flop-trained average
-   strategy. No additional solve is needed. **Refine decision** remains available
-   for a separate local solve with inherited ranges, but it is not the original
-   flop model. Poorly trained earlier ranges remain a source of error; uniform
-   propagation is disclosed. Refinement is not safe subgame solving.
-4. Use **Train more** to continue. Stop and timed budgets pause between traversal
-   batches or optimizer steps, including in the middle of a round. The unfinished
-   round resumes in place with its RNGs, buffers, models and optimizer intact.
-   The first prediction appears after one complete round; later pauses keep the
-   last completed average strategy available. The budget can overrun by the
-   current batch/step, plus device initialization. It does not wait for a whole round.
-5. The range grid shows **predicted average strategies**, including unseen hands.
-   **Direct samples** is a separate compatible-range-mass measure requiring both
-   advantage and strategy visits. Neither prediction availability nor visit counts
-   measure accuracy. Once the 50,000-state visit tracker fills, counts/coverage are
-   lower bounds. Replay sampling and neural learning continue normally.
-
-A neural round includes `deep_traversals` deals for **each** player, two advantage
-fits and two average-policy fits. Its count is not comparable to tabular iterations.
-Compare quality at equal elapsed time. Changing neural settings requires a new
-solve or refinement; Train more keeps the existing architecture and buffers. Models live
-in memory, like the tabular solver: JSON export records the displayed strategy
-and configuration, not a resumable neural checkpoint. Restarting loses training.
+## Deep CFR
 
 ### Supplied GTO Wizard line
 
 In **Settings → Load a specific spot**, choose **Set up supplied GTO Wizard flop**.
-This fills in Deep CFR, SB raise 2.5 / BB call, and **As Kd 7c** without starting
+This fills in SB raise 2.5 / BB call and **As Kd 7c** without starting
 training. Choose your time limit, then **Load spot & solve** when ready. The default
 CPU, 128-wide networks and 25,000-entry buffers are unchanged. Longer flop rounds
 may pause before producing a first prediction; **Train more** continues that round.
@@ -332,7 +202,6 @@ available at `POST /api/jobs/<id>/comparison` with `{}` for this original flop r
 
 | Setting | Default | Purpose |
 | --- | ---: | --- |
-| `backend` | `tabular` | Select `deep_cfr` explicitly |
 | `deep_device` | `cpu` | Or `mps` for Apple's GPU; unavailable MPS gives a clear error |
 | `deep_hidden` | 128 | Two fully connected hidden layers |
 | `deep_buffer_size` | 25,000 | Capacity of each of four uniform reservoirs |
@@ -406,7 +275,7 @@ PYTHONPATH=. .venv/bin/python benchmarks/deep_cfr.py --street flop --seconds 30 
 ```
 
 Run performance comparisons without other training jobs. The benchmark gives each
-backend the same training-time budget and records version/device,
+device the same training-time budget and records version/device,
 completed rounds/traversals, memory allocation, and direct versus predicted coverage.
 On its small river fixture it computes exact best-response exploitability for the
 **average policy**, before and after training. Flop/turn runs report no exploitability
@@ -414,23 +283,23 @@ estimate. A short neural run with no completed round is reported as unready; it
 must not be treated as a trained strategy. Tests cover uniform replay retention,
 legal-action masking, iteration weights, observation encoding, unseen-state
 prediction labeling, exact resume equivalence, three-street flop traversal,
-read-only reference inspection, API flop initialization/refinement/export, dependency-free
-fallback, and measured improvement in the small river fixture. They do not establish
-full Hold'em convergence or that Deep CFR beats tabular CFR at a fixed runtime.
+read-only reference inspection, API flop initialization/refinement/export, and
+measured improvement in the small river fixture. They do not establish full
+Hold'em convergence or unseen-branch accuracy.
 
-### Recorded short-run validation
+## Code map
 
-[Raw results](benchmarks/results/deep-cfr-river-m1-pro.json) record two seeds on an
-M1 Pro with 16 GB RAM, using 15 seconds per run and the defaults above. Initial
-exploitability was 0.96875 BB in this four-hand-pair river fixture.
+- `heads_up_gto/deep_cfr.py`: the sole training implementation, neural models,
+  replay reservoirs, pause/resume and prediction diagnostics.
+- `heads_up_gto/range_game.py`: compatible private-deal sampling, exact-state
+  keys, range conditioning and read-only navigation. Contains no trainer.
+- `heads_up_gto/game.py` / `sizing.py`: betting legality and scenario sizes.
+- `heads_up_gto/cards.py`: cards, ranges and exact hand evaluation.
+- `heads_up_gto/preflop.py` / `screenshot_charts.py`: fixed chart boundary.
+- `heads_up_gto/server.py`: local HTTP API and one background training job.
+- `heads_up_gto/diagnostics.py` / `reference_line.py`: sample summaries, small
+  river best responses and read-only screenshot-line inspection.
+- `heads_up_gto/static/`: browser interface with no remote assets or scripts.
 
-| Backend | Seed 7 exploitability (BB) | Seed 23 exploitability (BB) | Completed neural rounds |
-| --- | ---: | ---: | --- |
-| Tabular | 0.0102 | 0.0102 | Not applicable |
-| Deep CFR, CPU | 0.2265 | 0.2478 | 7 / 9 |
-| Deep CFR, MPS | 0.4778 | 0.3428 | 2 / 3 |
-
-CPU is the default based on this small-network comparison. Tabular CFR wins this
-tiny game decisively; the test verifies that the neural implementation learns,
-not that it is a replacement for tabular solving in small games. These brief
-measurements do not evaluate unseen-branch accuracy or full-game playing strength.
+The original experiment’s [recorded measurements](benchmarks/results/deep-cfr-river-m1-pro.json)
+are retained as historical data. The current benchmark runs Deep CFR only.

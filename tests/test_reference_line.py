@@ -10,7 +10,7 @@ from heads_up_gto.server import prepare
 class ReferenceLineTests(unittest.TestCase):
     def solver(self):
         return prepare({'flop': 'As Kd 7c', 'preflop': 'raise:2.5/call',
-                        'settings': {'mode': 'exact'}})[0]
+                        'settings': {'deep_buffer_size': 128}})[0]
 
     def test_reference_uses_existing_sizes_and_does_not_train(self):
         solver = self.solver()

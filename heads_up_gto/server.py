@@ -16,7 +16,7 @@ from .cards import parse_cards, combo_text
 from .game import Settings, State
 from .sizing import profile_for, sizing_metadata
 from .preflop import chart_ranges, reconstruct
-from .backends import create_solver
+from .deep_cfr import DeepCFRSolver
 from .screenshot_charts import screenshot_chart
 from .navigation import preflop_view
 from .reference_line import supports_reference, comparison_report
@@ -38,9 +38,9 @@ def app_settings(data):
     return replace(settings, sizes=((), (), ()), max_raises=2, include_all_in=True)
 
 
-def iteration_count(value):
-    if type(value) is not int or not 10 <= value <= 2**53 - 1:
-        raise ValueError("Iterations must be a whole number of at least 10.")
+def round_count(value):
+    if type(value) is not int or not 1 <= value <= 2**53 - 1:
+        raise ValueError("Neural rounds must be a whole number of at least 1.")
     return value
 
 
@@ -52,7 +52,9 @@ def training_budget(payload):
         if type(seconds) not in (int, float) or not math.isfinite(seconds) or not 0 < seconds <= 2**53 - 1:
             raise ValueError("Time limit must be a positive, finite number of seconds.")
         return {"time_limit_seconds": seconds}
-    return {"iterations": iteration_count(payload.get("iterations", 2000))}
+    if "iterations" in payload:
+        return {"iterations": round_count(payload["iterations"])}
+    return {"time_limit_seconds": 60}
 
 
 def running_stats(solver, budget):
@@ -72,8 +74,8 @@ def prepare(payload):
     approximation = {"frequency_step": chart["frequency_step"], "source": chart["provenance"]["source"], "jam_restriction": chart["provenance"]["jam_restriction"]}
     profile = profile_for(preflop.pot, preflop.stacks)
     root = State(preflop.pot, preflop.stacks, board, sizing_profile=profile)
-    solver = create_solver(root, ranges, settings)
-    return solver, budget, {"name": name, "is_demo": is_demo, "range_source": "wizard", "sizing_status": dict.fromkeys(("flop", "turn", "river"), "scenario_heuristic"), "sizing": sizing_metadata(profile), "preflop": preflop.history, "combos": [len(r) for r in ranges], "weighted_combos": [round(sum(r.values()), 2) for r in ranges], "pot": root.pot, "stacks": root.stacks, "settings": asdict(settings), "training_budget": budget, "range_approximation": approximation, "reference_line_available": supports_reference(root)}
+    solver = DeepCFRSolver(root, ranges, settings)
+    return solver, budget, {"name": name, "is_demo": is_demo, "backend": "deep_cfr", "range_source": "wizard", "sizing_status": dict.fromkeys(("flop", "turn", "river"), "scenario_heuristic"), "sizing": sizing_metadata(profile), "preflop": preflop.history, "combos": [len(r) for r in ranges], "weighted_combos": [round(sum(r.values()), 2) for r in ranges], "pot": root.pot, "stacks": root.stacks, "settings": asdict(settings), "training_budget": budget, "range_approximation": approximation, "reference_line_available": supports_reference(root)}
 
 
 def run_job(job, budget):
@@ -191,10 +193,8 @@ class Handler(BaseHTTPRequestHandler):
                     with LOCK:
                         if any(j["busy"] for j in JOBS.values()):
                             return self.send_json({"error": "A solve is already running."}, 409)
-                        # A resume keeps its card abstraction and seed. Only the
-                        # optional decision cap may change without a new solve.
                         if "max_nodes" in payload:
-                            job["solver"].settings = app_settings({**asdict(job["solver"].settings), "max_nodes": payload["max_nodes"]})
+                            raise ValueError("Decision limits are unsupported; Deep CFR uses bounded replay buffers.")
                         job["metadata"] = {**job["metadata"], "settings": asdict(job["solver"].settings), "training_budget": budget}
                         job["solver"].cancel.clear()
                         job["busy"] = True
@@ -213,7 +213,7 @@ class Handler(BaseHTTPRequestHandler):
                         if state.terminal or state.pending:
                             raise ValueError("Refine an active decision after dealing the next board card.")
                         settings = app_settings(payload.get("settings", asdict(job["solver"].settings)))
-                        solver = create_solver(replace(state, path=()), ranges, settings)
+                        solver = DeepCFRSolver(replace(state, path=()), ranges, settings)
                         metadata = {**job["metadata"], "pot": state.pot, "stacks": state.stacks, "combos": [len(r) for r in ranges], "local_refinement": True, "parent_path": node_path, "fallback_used": fallback, "settings": asdict(settings), "training_budget": budget, "reference_line_available": supports_reference(solver.root)}
                         request = {"original": job["request"], "refine_path": node_path}
                         new_job = {"id": uuid.uuid4().hex, "solver": solver, "metadata": metadata, "request": request, "stats": running_stats(solver, budget), "busy": True}

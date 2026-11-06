@@ -5,7 +5,7 @@ from heads_up_gto.game import Settings, State
 from heads_up_gto.navigation import preflop_view
 from heads_up_gto.preflop import demo_chart, reconstruct
 from heads_up_gto.screenshot_charts import screenshot_chart
-from heads_up_gto.solver import Solver
+from heads_up_gto.deep_cfr import DeepCFRSolver
 
 
 class PreflopNavigationTests(unittest.TestCase):
@@ -92,7 +92,7 @@ class PreflopNavigationTests(unittest.TestCase):
 class PostflopTimelineTests(unittest.TestCase):
     def setUp(self):
         root = State(5, (97.5, 97.5), parse_cards('2c 7d 9h', 3))
-        self.solver = Solver(root, (parse_range('AsAh'), parse_range('KsKh')), Settings(sizes=((.5,),)*3, include_all_in=False))
+        self.solver = DeepCFRSolver(root, (parse_range('AsAh'), parse_range('KsKh')), Settings(deep_buffer_size=128, sizes=((.5,),)*3, include_all_in=False))
 
     def test_timeline_includes_every_decision_and_board(self):
         path = ['check', 'check', 'deal:Ts', 'bet:2.5', 'call', 'deal:3d']

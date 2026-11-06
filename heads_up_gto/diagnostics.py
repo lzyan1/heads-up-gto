@@ -3,7 +3,7 @@ from .cards import score
 
 
 def river_exploitability(solver, max_pairs=400):
-    if solver.root.street != 2 or solver.settings.mode != "exact":
+    if solver.root.street != 2:
         raise ValueError("Exact exploitability is only implemented for small exact-card river games.")
     pairs = []
     for a, wa in solver.ranges[0].items():

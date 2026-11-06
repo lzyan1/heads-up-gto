@@ -13,13 +13,7 @@ class Settings:
     raise_multiplier: float = 3.0
     max_raises: int = 1
     include_all_in: bool = True
-    buckets: int = 8
-    equity_samples: int = 24
-    mode: str = "bucketed"
-    chance_mode: str = "sampled"  # or enumerate_turns (exact cards only)
     seed: int = 7
-    max_nodes: int | None = None  # unlimited unless an optional limit is chosen
-    backend: str = "tabular"
     deep_device: str = "cpu"
     deep_hidden: int = 128
     deep_buffer_size: int = 25000  # per reservoir: two advantage + two strategy
@@ -39,8 +33,6 @@ class Settings:
         if "sizes" in data:
             data["sizes"] = tuple(tuple(sorted(set(float(x) for x in row))) for row in data["sizes"])
         obj = cls(**data)
-        if obj.backend not in ("tabular", "deep_cfr"):
-            raise ValueError("Backend must be tabular or deep_cfr.")
         if obj.deep_device not in ("cpu", "mps"):
             raise ValueError("Deep CFR device must be cpu or mps.")
         for name, lo, hi in (("deep_hidden", 32, 256), ("deep_buffer_size", 128, 100000),
@@ -48,29 +40,14 @@ class Settings:
                              ("deep_batch_size", 16, 2048), ("deep_inference_batch", 1, 128)):
             if type(getattr(obj, name)) is not int or not lo <= getattr(obj, name) <= hi:
                 raise ValueError(f"{name} must be an integer between {lo} and {hi}.")
-        if obj.backend == "deep_cfr":
-            if obj.mode != "exact" or obj.chance_mode != "sampled":
-                raise ValueError("Deep CFR uses exact card inputs and sampled boards.")
-            if obj.max_nodes is not None:
-                raise ValueError("Deep CFR uses bounded replay buffers; leave the decision limit blank.")
         if len(obj.sizes) != 3 or any(len(row) > 3 or any(not math.isfinite(x) or not .1 <= x <= 3 for x in row) for row in obj.sizes):
             raise ValueError("Give up to three pot fractions per street, each between 0.1 and 3.")
-        if obj.chance_mode not in ("sampled", "enumerate_turns"):
-            raise ValueError("Chance mode must be sampled or enumerate_turns.")
-        if obj.chance_mode == "enumerate_turns" and obj.mode != "exact":
-            raise ValueError("Turn enumeration requires exact cards.")
-        if obj.mode not in ("bucketed", "exact"):
-            raise ValueError("Mode must be bucketed or exact.")
         if type(obj.max_raises) is not int or not 0 <= obj.max_raises <= 2:
             raise ValueError("Raise cap must be 0, 1, or 2 raises after the opening bet.")
         if not math.isfinite(obj.raise_multiplier) or not 2 <= obj.raise_multiplier <= 4:
             raise ValueError("Raise multiplier must be between 2 and 4.")
-        if obj.max_nodes is not None and (type(obj.max_nodes) is not int or obj.max_nodes < 1):
-            raise ValueError("max_nodes must be null (unlimited) or a positive integer.")
-        for name, lo, hi in (("buckets", 4, 32), ("equity_samples", 8, 256), ("seed", 0, 2**31 - 1)):
-            value = getattr(obj, name)
-            if type(value) is not int or not lo <= value <= hi:
-                raise ValueError(f"{name} must be an integer between {lo} and {hi}.")
+        if type(obj.seed) is not int or not 0 <= obj.seed <= 2**31 - 1:
+            raise ValueError("seed must be an integer between 0 and 2147483647.")
         if type(obj.include_all_in) is not bool:
             raise ValueError("include_all_in must be true or false.")
         return obj

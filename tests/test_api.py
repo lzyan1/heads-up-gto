@@ -1,5 +1,4 @@
 import json
-import importlib.util
 import threading
 import time
 import unittest
@@ -41,54 +40,6 @@ class APITests(unittest.TestCase):
             self.assertIn(b'Solve continuation',response.read())
             self.assertIn("frame-ancestors 'none'",response.headers['Content-Security-Policy'])
 
-    @unittest.skipUnless(all(importlib.util.find_spec(x) is not None for x in ('torch', 'numpy')), 'Install .[deep]')
-    def test_neural_refinement_resume_and_export(self):
-        initial = {'flop': 'As Kd 7c', 'preflop': 'raise:2.5/raise:11.5/raise:26/call',
-                   'iterations': 10, 'settings': {'mode': 'exact'}}
-        parent = self.wait(self.request('/api/solve', initial))
-        settings = {'backend': 'deep_cfr', 'mode': 'exact', 'deep_hidden': 32,
-                    'deep_buffer_size': 128, 'deep_traversals': 2, 'deep_train_steps': 2,
-                    'deep_batch_size': 16, 'deep_inference_batch': 2}
-        path = ['check', 'check', 'deal:2h', 'check', 'check', 'deal:3d']
-        refined = self.wait(self.request(f"/api/jobs/{parent['id']}/refine",
-                                        {'path': path, 'settings': settings, 'iterations': 10}))
-        self.assertEqual(refined['stats']['backend'], 'deep_cfr')
-        self.assertTrue(refined['stats']['prediction_ready'])
-        self.assertTrue(refined['metadata']['local_refinement'])
-        view = self.request(f"/api/jobs/{refined['id']}/node", {'path': []})
-        self.assertAlmostEqual(view['prediction_coverage'], 1)
-        self.assertLess(view['coverage'], view['prediction_coverage'])
-        self.assertAlmostEqual(sum(view['aggregate']), 1, places=6)
-        resumed = self.wait(self.request(f"/api/jobs/{refined['id']}/resume", {'iterations': 10}))
-        self.assertEqual(resumed['stats']['iterations'], 20)
-        exported = self.request(f"/api/jobs/{refined['id']}/export", {'path': []})
-        self.assertEqual(exported['metadata']['settings']['backend'], 'deep_cfr')
-        self.assertTrue(exported['node']['neural']['predictions'])
-
-    @unittest.skipUnless(all(importlib.util.find_spec(x) is not None for x in ('torch', 'numpy')), 'Install .[deep]')
-    def test_flop_neural_solve_and_read_only_reference_comparison(self):
-        payload = {'flop': 'As Kd 7c', 'preflop': 'raise:2.5/call', 'time_limit_seconds': 1e-9,
-                   'settings': {'backend': 'deep_cfr', 'mode': 'exact', 'deep_hidden': 32,
-                                'deep_buffer_size': 128, 'deep_traversals': 1,
-                                'deep_train_steps': 1, 'deep_batch_size': 16}}
-        # Exercise initialization and export only; leave this real scenario's
-        # training to the user. Tiny synthetic games test neural learning.
-        job = self.wait(self.request('/api/solve', payload))
-        prefix = '/api/jobs/' + job['id']
-        self.assertEqual(job['stats']['backend'], 'deep_cfr')
-        self.assertTrue(job['metadata']['reference_line_available'])
-        self.assertEqual(job['stats']['iterations'], 0)
-        report = self.request(prefix + '/comparison', {})
-        self.assertFalse(report['reference_frequencies_available'])
-        self.assertEqual(len(report['nodes']), 7)
-        self.assertEqual(report['nodes'][-1]['model']['pot'], 21)
-        self.assertEqual(report['nodes'][-1]['reference']['pot'], 41)
-        self.assertEqual(report['nodes'][0]['model']['aggregate'], [])
-        self.assertEqual(report['stats']['iterations'], 0)
-        self.assertEqual(len(report['root_ranges']), 2)
-        self.assertEqual(report['root_state']['street'], 0)
-        self.assertEqual(self.request(prefix)['stats'], job['stats'])
-
     def test_cross_origin_rejected(self):
         with self.assertRaises(HTTPError) as error:self.request('/api/solve',{},'https://example.com')
         self.assertEqual(error.exception.code,400);error.exception.close()
@@ -118,9 +69,9 @@ class APITests(unittest.TestCase):
                 self.request('/api/preflop', payload)
             self.assertEqual(error.exception.code, 400)
             error.exception.close()
-        self.assertTrue(self.request('/api/settings/validate', {'settings': {'buckets': 8}})['ok'])
+        self.assertTrue(self.request('/api/settings/validate', {'settings': {'deep_hidden': 64}})['ok'])
         with self.assertRaises(HTTPError) as error:
-            self.request('/api/settings/validate', {'settings': {'buckets': 0}})
+            self.request('/api/settings/validate', {'settings': {'deep_hidden': 0}})
         self.assertEqual(error.exception.code, 400)
         error.exception.close()
         with urlopen(self.base+'/model.mjs') as response:
@@ -175,148 +126,142 @@ class APITests(unittest.TestCase):
         self.assertEqual(called['terminal'], 'showdown')
         self.assertEqual(called['pot'], 200)
 
-    def test_solve_navigate_refine_export_and_resume(self):
-        payload={'flop':'2c 7d 9h','preflop':'raise:2.5/call','iterations':100,'settings':{'sizes':[[.5],[.5],[.5]],'include_all_in':False,'max_raises':0,'equity_samples':8,'buckets':4}}
-        job=self.wait(self.request('/api/solve',payload));self.assertEqual(job['stats']['status'],'complete')
-        prefix='/api/jobs/'+job['id']
-        diagnostic=self.request(prefix+'/diagnostics',{})
-        self.assertEqual(sum(x['hands'] for x in diagnostic['coverage']['streets'].values()),job['stats']['nodes'])
-        self.assertEqual(diagnostic['stats']['completed_traversals'],[100,100])
-        root=self.request(prefix+'/node',{'path':[],'hand':'As8s'})
-        self.assertIn('training',root)
-        self.assertEqual(root['actor'],0);self.assertAlmostEqual(sum(root['aggregate']),1)
-        self.assertIn('bet:97.5', [a['key'] for a in root['actions']])
-        facing_jam=self.request(prefix+'/node',{'path':['bet:97.5']})
-        self.assertEqual([a['key'] for a in facing_jam['actions']], ['fold', 'call'])
-        self.assertEqual(self.request(prefix+'/node',{'path':['bet:97.5','call']})['terminal'], 'showdown')
-        pending=self.request(prefix+'/node',{'path':['check','check']});self.assertTrue(pending['pending'])
-        turn=self.request(prefix+'/node',{'path':['check','check','deal:Ts']});self.assertEqual(turn['street'],'Turn')
-        self.assertIn('bet:97.5', [a['key'] for a in turn['actions']])
-        refined=self.wait(self.request(prefix+'/refine',{'path':['check','check','deal:Ts'],'iterations':100}))
+    settings = dict(deep_hidden=32, deep_buffer_size=128, deep_traversals=2,
+                    deep_train_steps=2, deep_batch_size=16, deep_inference_batch=2)
+
+    def start(self, **changes):
+        payload = {'flop': 'As Kd 7c', 'preflop': 'raise:2.5/call',
+                   'time_limit_seconds': 1e-9, 'settings': self.settings}
+        return self.wait(self.request('/api/solve', {**payload, **changes}))
+
+    def test_default_solver_budget_and_removed_settings(self):
+        from heads_up_gto.server import training_budget
+        from heads_up_gto.deep_cfr import DeepCFRSolver
+        from heads_up_gto.server import prepare
+        solver, budget, metadata = prepare({'flop': 'As Kd 7c', 'preflop': 'raise:2.5/call',
+                                             'settings': self.settings})
+        self.assertIsInstance(solver, DeepCFRSolver)
+        self.assertEqual(budget, {'time_limit_seconds': 60})
+        self.assertEqual(metadata['backend'], 'deep_cfr')
+        self.assertEqual(training_budget({'iterations': 1}), {'iterations': 1})
+        for key, value in dict(backend='tabular', mode='bucketed', chance_mode='enumerate_turns',
+                               max_nodes=1, buckets=8, equity_samples=24).items():
+            with self.subTest(key=key), self.assertRaises(HTTPError) as error:
+                self.request('/api/settings/validate', {'settings': {key: value}})
+            self.assertEqual(error.exception.code, 400)
+            error.exception.close()
+        with urlopen(self.base) as response:
+            page = response.read().decode()
+        self.assertNotIn('Tabular', page)
+        self.assertNotIn('id="backend"', page)
+        self.assertNotIn('id="max-nodes"', page)
+        self.assertIn('Neural rounds per run', page)
+
+    def test_solve_navigate_refine_train_resume_export(self):
+        job = self.start()
+        prefix = '/api/jobs/' + job['id']
+        self.assertEqual(job['stats']['backend'], 'deep_cfr')
+        self.assertFalse(job['stats']['prediction_ready'])
+        root = self.request(prefix + '/node', {'path': []})
+        self.assertEqual(root['aggregate'], [])
+        self.assertEqual(root['prediction_coverage'], 0)
+        self.assertTrue(all(r['probabilities'] is None for r in root['rows']))
+        facing = self.request(prefix + '/node', {'path': ['bet:97.5']})
+        self.assertEqual([a['key'] for a in facing['actions']], ['fold', 'call'])
+        self.assertEqual(self.request(prefix + '/node', {'path': ['bet:97.5', 'call']})['terminal'], 'showdown')
+        path = ['check', 'check', 'deal:2h', 'check', 'check', 'deal:3d']
+        before = self.request(prefix + '/node', {'path': path})
+        refined = self.wait(self.request(prefix + '/refine', {'path': path, 'iterations': 1}))
         self.assertTrue(refined['metadata']['local_refinement'])
-        newprefix='/api/jobs/'+refined['id']
-        node=self.request(newprefix+'/node',{'path':[],'hand':'As8s'});self.assertEqual(node['street'],'Turn')
-        river=self.request(newprefix+'/node',{'path':['check','check','deal:3d']});self.assertEqual(river['street'],'River')
-        self.assertIn('bet:97.5', [a['key'] for a in river['actions']])
-        report=self.request(newprefix+'/export',{'path':[]})
-        self.assertEqual(len(report['root_state']['board']),4);self.assertEqual(len(report['root_ranges']),2)
-        resumed=self.wait(self.request(newprefix+'/resume',{'iterations':50}));self.assertEqual(resumed['stats']['iterations'],150)
+        self.assertTrue(refined['metadata']['fallback_used'])
+        self.assertTrue(refined['stats']['prediction_ready'])
+        self.assertEqual(refined['stats']['completed_traversals'], [2, 2])
+        newprefix = '/api/jobs/' + refined['id']
+        node = self.request(newprefix + '/node', {'path': []})
+        self.assertEqual(node['street'], 'River')
+        self.assertEqual(node['actions'], before['actions'])
+        self.assertAlmostEqual(node['prediction_coverage'], 1)
+        self.assertAlmostEqual(sum(node['aggregate']), 1, places=6)
+        self.assertLess(node['coverage'], node['prediction_coverage'])
+        resumed = self.wait(self.request(newprefix + '/resume', {'iterations': 1}))
+        self.assertEqual(resumed['stats']['iterations'], 2)
+        self.assertEqual(resumed['stats']['completed_traversals'], [4, 4])
+        diagnostic = self.request(newprefix + '/diagnostics', {})
+        self.assertEqual(sum(x['hands'] for x in diagnostic['coverage']['streets'].values()), resumed['stats']['nodes'])
+        exported = self.request(newprefix + '/export', {'path': []})
+        self.assertEqual(exported['metadata']['backend'], 'deep_cfr')
+        self.assertTrue(exported['node']['neural']['predictions'])
+        self.assertEqual(len(exported['root_state']['board']), 5)
+        self.assertEqual(len(exported['root_ranges']), 2)
+        self.assertNotIn('buckets', exported['metadata']['settings'])
 
-    def test_turn_enumeration_settings_export_and_resume(self):
-        payload={'flop':'As Td 6h','preflop':'raise:2.5/raise:11.5/call','iterations':10,
-                 'settings':{'mode':'exact','chance_mode':'enumerate_turns'}}
-        job=self.wait(self.request('/api/solve',payload))
-        self.assertEqual(job['stats']['chance_mode'],'enumerate_turns')
-        self.assertEqual(job['stats']['enumerated_turns'],450)
-        prefix='/api/jobs/'+job['id']
-        report=self.request(prefix+'/export',{'path':[]})
-        self.assertEqual(report['metadata']['settings']['chance_mode'],'enumerate_turns')
-        self.assertIn('bet:88.5',[a['key'] for a in report['node']['actions']])
-        resumed=self.wait(self.request(prefix+'/resume',{'iterations':10}))
-        self.assertEqual(resumed['stats']['enumerated_turns'],900)
-        self.assertEqual(resumed['stats']['iterations'],20)
-
-    def test_stop_returns_partial_results(self):
-        job=self.request('/api/solve',{'flop':'As Kd 7c','preflop':'raise:2.5/call','iterations':100000})
-        self.request('/api/jobs/'+job['id']+'/stop',{})
-        result=self.wait(job)
-        self.assertEqual(result['stats']['status'],'cancelled')
-
-    def test_app_training_is_uncapped_by_default(self):
-        payload = {'flop': 'As Kd 7c', 'preflop': 'raise:2.5/call', 'iterations': 10,
-                   'settings': {'equity_samples': 8, 'buckets': 4}}
-        job = self.wait(self.request('/api/solve', payload))
-        self.assertEqual(job['stats']['status'], 'complete')
-        self.assertGreater(job['stats']['nodes'], 1)
-        self.assertIsNone(job['metadata']['settings']['max_nodes'])
+    def test_read_only_reference_comparison(self):
+        job = self.start()
         prefix = '/api/jobs/' + job['id']
-        resumed = self.wait(self.request(prefix + '/resume', {'iterations': 10}))
-        self.assertEqual(resumed['stats']['iterations'], 20)
-        self.assertEqual(resumed['stats']['status'], 'complete')
-        refined = self.wait(self.request(prefix + '/refine', {'path': ['check'], 'iterations': 10}))
-        self.assertEqual(refined['stats']['status'], 'complete')
-        self.assertIsNone(refined['metadata']['settings']['max_nodes'])
-        self.assertTrue(self.request('/api/settings/validate', {'iterations': 200001})['ok'])
+        self.assertTrue(job['metadata']['reference_line_available'])
+        report = self.request(prefix + '/comparison', {})
+        self.assertFalse(report['reference_frequencies_available'])
+        self.assertEqual(len(report['nodes']), 7)
+        self.assertEqual(report['nodes'][-1]['model']['pot'], 21)
+        self.assertEqual(report['nodes'][-1]['reference']['pot'], 41)
+        self.assertEqual(report['nodes'][0]['model']['aggregate'], [])
+        self.assertEqual(self.request(prefix)['stats'], job['stats'])
+
+    def test_stop_returns_partial_round_and_resume_gets_fresh_budget(self):
+        job = self.request('/api/solve', {'flop': 'As Kd 7c', 'preflop': 'raise:2.5/call',
+                                        'iterations': 100000, 'settings': self.settings})
+        prefix = '/api/jobs/' + job['id']
         with self.assertRaises(HTTPError) as error:
-            self.request('/api/settings/validate', {'iterations': 9})
-        self.assertEqual(error.exception.code, 400)
+            self.request(prefix + '/node', {})
+        self.assertEqual(error.exception.code, 409)
         error.exception.close()
-
-    def test_restored_card_settings_and_optional_decision_limit(self):
-        settings = {'mode': 'exact', 'buckets': 16, 'equity_samples': 32, 'seed': 91, 'max_nodes': 1}
-        payload = {'flop': 'As Kd 7c', 'preflop': 'raise:2.5/call', 'iterations': 10, 'settings': settings}
-        job = self.wait(self.request('/api/solve', payload))
-        for key, value in settings.items():
-            self.assertEqual(job['metadata']['settings'][key], value)
-        self.assertEqual(job['stats']['status'], 'node_limit')
-        resumed = self.wait(self.request('/api/jobs/' + job['id'] + '/resume', {'iterations': 10, 'max_nodes': None}))
+        self.request(prefix + '/stop', {})
+        stopped = self.wait(job)
+        self.assertEqual(stopped['stats']['status'], 'cancelled')
+        resumed = self.wait(self.request(prefix + '/resume', {'time_limit_seconds': 1e-9}))
+        self.assertEqual(resumed['stats']['iterations'], stopped['stats']['iterations'])
         self.assertEqual(resumed['stats']['status'], 'complete')
-        self.assertGreater(resumed['stats']['nodes'], 1)
-        self.assertIsNone(resumed['metadata']['settings']['max_nodes'])
-        self.assertEqual(resumed['metadata']['settings']['mode'], 'exact')
+        self.assertEqual(resumed['stats']['time_limit_seconds'], 1e-9)
+        self.assertGreaterEqual(resumed['stats']['seconds'], stopped['stats']['seconds'])
 
-    def test_timed_solve_resume_refine_and_switch_back_to_iterations(self):
-        payload = {'flop': 'As Kd 7c', 'preflop': 'raise:2.5/call', 'time_limit_seconds': .1,
-                   'settings': {'mode': 'exact'}}
-        job = self.wait(self.request('/api/solve', payload))
-        self.assertEqual(job['stats']['status'], 'complete')
-        self.assertGreater(job['stats']['iterations'], 0)
-        self.assertIsNone(job['stats']['target'])
-        self.assertEqual(job['stats']['time_limit_seconds'], .1)
-        self.assertGreaterEqual(job['stats']['run_seconds'], .1)
-        self.assertLess(job['stats']['run_seconds'], 2)
-        prefix = '/api/jobs/' + job['id']
-        resumed = self.wait(self.request(prefix + '/resume', {'time_limit_seconds': .1}))
-        self.assertGreater(resumed['stats']['iterations'], job['stats']['iterations'])
-        self.assertGreaterEqual(resumed['stats']['seconds'], job['stats']['seconds'] + .09)
-        self.assertLess(resumed['stats']['run_seconds'], 2)
-        counted = self.wait(self.request(prefix + '/resume', {'iterations': 10}))
-        self.assertEqual(counted['stats']['iterations'], resumed['stats']['iterations'] + 10)
-        self.assertIsNone(counted['stats']['time_limit_seconds'])
-        refined = self.wait(self.request(prefix + '/refine', {'path': ['check'], 'time_limit_seconds': .1,
-                                                          'settings': {'mode': 'bucketed', 'buckets': 6, 'equity_samples': 8, 'seed': 23}}))
-        self.assertEqual(refined['stats']['status'], 'complete')
-        self.assertEqual(refined['metadata']['settings']['buckets'], 6)
-        self.assertEqual(refined['metadata']['training_budget'], {'time_limit_seconds': .1})
-        report = self.request('/api/jobs/' + refined['id'] + '/export', {'path': []})
-        self.assertEqual(report['stats']['time_limit_seconds'], .1)
-        self.assertEqual(report['metadata']['settings']['seed'], 23)
-
-    def test_invalid_time_limits_rejected_on_every_training_endpoint(self):
+    def test_invalid_budgets_rejected_on_every_training_endpoint(self):
         base = {'flop': 'As Kd 7c', 'preflop': 'raise:2.5/call'}
-        job = self.wait(self.request('/api/solve', {**base, 'iterations': 10, 'settings': {'mode': 'exact'}}))
+        job = self.start()
         prefix = '/api/jobs/' + job['id']
         endpoints = ('/api/settings/validate', '/api/solve', prefix + '/resume', prefix + '/refine')
-        for budget in ({'time_limit_seconds': 0}, {'time_limit_seconds': -1}, {'time_limit_seconds': '2'}, {'time_limit_seconds': True}, {'time_limit_seconds': None}, {'time_limit_seconds': float('inf')}, {'time_limit_seconds': float('nan')}, {'time_limit_seconds': 1, 'iterations': 10}):
+        for budget in ({'time_limit_seconds': 0}, {'time_limit_seconds': -1}, {'time_limit_seconds': '2'},
+                       {'time_limit_seconds': True}, {'time_limit_seconds': None},
+                       {'time_limit_seconds': float('inf')}, {'time_limit_seconds': float('nan')},
+                       {'time_limit_seconds': 1, 'iterations': 1}, {'iterations': 0}, {'iterations': True}):
             for endpoint in endpoints:
                 with self.subTest(budget=budget, endpoint=endpoint), self.assertRaises(HTTPError) as error:
                     self.request(endpoint, {**base, **budget, 'path': []})
                 self.assertEqual(error.exception.code, 400)
                 error.exception.close()
+        with self.assertRaises(HTTPError) as error:
+            self.request(prefix + '/resume', {'max_nodes': None})
+        self.assertEqual(error.exception.code, 400)
+        error.exception.close()
 
     def test_refine_keeps_sizing_context(self):
-        job = self.wait(self.request('/api/solve', {'flop': 'As Td 6h', 'preflop': 'raise:2.5/call', 'iterations': 10, 'settings': {'equity_samples': 8, 'buckets': 4}}))
+        job = self.start(flop='As Td 6h')
         prefix = '/api/jobs/' + job['id']
         path = ['check', 'bet:1.7', 'raise:8']
         before = self.request(prefix + '/node', {'path': path})
-        self.assertEqual([a['key'] for a in before['actions']], ['fold', 'call', 'raise:97.5'])
-        refined = self.wait(self.request(prefix + '/refine', {'path': path, 'iterations': 10, 'settings': {'sizes': [[3], [.6], [.9]], 'include_all_in': False, 'max_raises': 0, 'equity_samples': 8, 'buckets': 4}}))
+        refined = self.wait(self.request(prefix + '/refine', {'path': path, 'time_limit_seconds': 1e-9}))
         prefix = '/api/jobs/' + refined['id']
         after = self.request(prefix + '/node', {'path': []})
         self.assertEqual(before['actions'], after['actions'])
         self.assertEqual(before['sizing'], after['sizing'])
-        jam = self.request(prefix + '/node', {'path': ['raise:97.5']})
-        self.assertEqual([a['key'] for a in jam['actions']], ['fold', 'call'])
         turn_path = ['call', 'deal:2c', 'check']
         turn = self.request(prefix + '/node', {'path': turn_path})
         self.assertEqual(turn['sizing']['scenario'], 'stab')
-        second = self.wait(self.request(prefix + '/refine', {'path': turn_path, 'iterations': 10}))
+        second = self.wait(self.request(prefix + '/refine', {'path': turn_path, 'time_limit_seconds': 1e-9}))
         report = self.request('/api/jobs/' + second['id'] + '/export', {'path': []})
         self.assertEqual(turn['actions'], report['node']['actions'])
         self.assertEqual(report['root_state']['aggressor_history'], [0])
         self.assertEqual(report['root_state']['path'], [])
-        self.assertEqual(report['metadata']['sizing']['profile'], 'single_raised')
-        self.assertEqual(report['metadata']['settings']['sizes'], [[], [], []])
 
 
-if __name__=='__main__':unittest.main()
+if __name__ == '__main__':
+    unittest.main()

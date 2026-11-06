@@ -4,9 +4,10 @@ import {branchPath,handCombos,comboKey,isBlocked,chooseCard,deck,groupRows,actio
 
 test('training controls submit only the selected limit and ignore the inactive field',()=>{
   assert.deepEqual(trainingLimit('time',NaN,60),{time_limit_seconds:60});
+  assert.deepEqual(trainingLimit('iterations',1,NaN),{iterations:1});
   assert.deepEqual(trainingLimit('iterations',200001,NaN),{iterations:200001});
   for(const seconds of [0,-1,Infinity,NaN])assert.throws(()=>trainingLimit('time',2000,seconds));
-  for(const iterations of [0,9,10.5,Infinity,NaN])assert.throws(()=>trainingLimit('iterations',iterations,60));
+  for(const iterations of [0,-1,1.5,Infinity,NaN])assert.throws(()=>trainingLimit('iterations',iterations,60));
 });
 
 test('revisiting the same action preserves future streets; changing it forks the line',()=>{

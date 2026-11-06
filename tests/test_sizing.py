@@ -4,7 +4,7 @@ from heads_up_gto.cards import parse_cards, parse_range
 from heads_up_gto.game import Settings, State
 from heads_up_gto.server import prepare
 from heads_up_gto.sizing import board_features, choose_size, opening_scenario, profile_for
-from heads_up_gto.solver import Solver
+from heads_up_gto.range_game import RangeGame
 
 
 class ScenarioSizingTests(unittest.TestCase):
@@ -75,11 +75,10 @@ class ScenarioSizingTests(unittest.TestCase):
         self.assertEqual(river.aggressor_history, (1, 1))
         self.assertEqual(choose_size(self.act(river, "check")), choose_size(replace(self.act(river, "check"), path=())))
 
-    def test_public_abstraction_never_merges_different_sizing_textures(self):
+    def test_exact_state_keys_distinguish_sizing_textures(self):
         dry, wet = self.root(board="As Kd 7c"), self.root(board="9s 8d 6c")
         ranges = (parse_range("QhQc, JhJc"), parse_range("ThTc, 5h5c"))
-        solver = Solver(dry, ranges, Settings(buckets=4, equity_samples=8))
-        solver.bucket = lambda *args: 0
+        solver = RangeGame(dry, ranges, Settings())
         hand = next(iter(ranges[0]))
         self.assertNotEqual(solver.info_key(dry, hand), solver.info_key(wet, hand))
         suit_rotated = replace(dry, board=tuple(c // 4 * 4 + (c % 4 + 1) % 4 for c in dry.board))

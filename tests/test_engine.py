@@ -1,12 +1,10 @@
 import itertools
 import random
 import unittest
-from unittest.mock import patch
 from heads_up_gto.cards import parse_cards, parse_range, score
 from heads_up_gto.preflop import reconstruct, chart_ranges, demo_chart, validate_chart
 from heads_up_gto.game import State, Settings
-from heads_up_gto.solver import Solver, Node
-from heads_up_gto.diagnostics import river_exploitability
+from heads_up_gto.range_game import RangeGame
 
 
 def cards(text): return parse_cards(text)
@@ -113,106 +111,20 @@ class BettingTests(unittest.TestCase):
             for winner in (-1,0,1):self.assertAlmostEqual(s.payoff(winner,0)+s.payoff(winner,1),0)
 
 
-class SolverTests(unittest.TestCase):
-    def small(self,mode='exact'):
-        root=State(2,(3,3),cards('2c 7d 9h Js Qc'),street=2)
-        ranges=(parse_range('AsAh, 6s6h'),parse_range('KsKh, 5s5h'))
-        settings=Settings(sizes=((.5,),(.5,),(.5,)),include_all_in=False,max_raises=0,mode=mode,buckets=4,equity_samples=8,seed=42)
-        return Solver(root,ranges,settings)
-
-    def test_exact_river_converges_against_best_response(self):
-        solver=self.small();initial=river_exploitability(solver)['exploitability_bb'];solver.train(6000)
-        final=river_exploitability(solver)['exploitability_bb']
-        self.assertLess(final,.04);self.assertLess(final,initial*.2)
-
-    def test_reproducible_and_resume(self):
-        a,b=self.small(),self.small();a.train(80);a.train(120);b.train(200)
-        self.assertEqual(a.inspect([]),b.inspect([]))
-
-    def test_timed_runs_finish_iterations_and_resume_with_a_fresh_deadline(self):
-        solver, baseline = self.small(), self.small()
-        solver.train(10)
-        previous = solver.elapsed
-        clock = [100.0]
-        sample = solver.sample_deal
-        reports = []
-        def slow_deal():
-            clock[0] += .4
-            return sample()
-        with patch('heads_up_gto.solver.time.monotonic', side_effect=lambda: clock[0]), patch.object(solver, 'sample_deal', side_effect=slow_deal):
-            first = solver.train(time_limit_seconds=.5, progress=reports.append)
-            second = solver.train(time_limit_seconds=.5)
-        self.assertEqual((first['iterations'], second['iterations']), (12, 14))
-        self.assertEqual(first['status'], 'complete')
-        self.assertIsNone(first['target'])
-        self.assertEqual(first['time_limit_seconds'], .5)
-        self.assertEqual((first['run_seconds'], second['run_seconds']), (.8, .8))
-        self.assertAlmostEqual(solver.elapsed, previous + 1.6)
-        self.assertEqual(reports[-1]['run_seconds'], .8)
-        baseline.train(14)
-        self.assertEqual(solver.inspect([]), baseline.inspect([]))
-        resumed = solver.train(10)
-        self.assertEqual(resumed['target'], 24)
-        self.assertIsNone(resumed['time_limit_seconds'])
-
-    def test_time_limit_validation_and_manual_stop(self):
-        solver = self.small()
-        for kwargs in ({}, {'iterations': 10, 'time_limit_seconds': 1}, {'time_limit_seconds': 0}, {'time_limit_seconds': -1}, {'time_limit_seconds': float('nan')}, {'time_limit_seconds': float('inf')}, {'time_limit_seconds': True}):
-            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
-                solver.train(**kwargs)
-        solver.cancel.set()
-        result = solver.train(time_limit_seconds=10)
-        self.assertEqual(result['status'], 'cancelled')
-        self.assertEqual(result['iterations'], 0)
-
-    def test_average_probabilities(self):
-        solver=self.small();solver.train(200);result=solver.inspect([])
-        self.assertAlmostEqual(sum(result['aggregate']),1)
-        self.assertAlmostEqual(sum(r['mass'] for r in result['rows']),1)
-        for r in result['rows']:self.assertAlmostEqual(sum(r['probabilities']),1)
-
-    def test_never_fabricate_untrained_recommendations(self):
-        solver=self.small();view=solver.inspect([])
-        self.assertEqual(view['coverage'],0);self.assertTrue(all(r['probabilities'] is None for r in view['rows']))
-        self.assertTrue(solver.inspect(['check'])['fallback_used'])
-        hand=next(iter(solver.ranges[0]));key=solver.info_key(solver.root,hand)
-        fresh=Node(len(solver.root.actions(solver.settings)));fresh.total=[1.0]*len(fresh.total);fresh.averages=1;solver.nodes[key]=fresh
-        self.assertIsNone(solver.policy(solver.root,hand)[0])
-
+class RangeSamplingTests(unittest.TestCase):
     def test_sampling_correct_blocker_weighted_joint(self):
         root=State(2,(99,99),cards('2c 7d 9h'));r0=parse_range('AsAh, KsKh');r1=parse_range('AsAd, QsQh')
-        solver=Solver(root,(r0,r1),Settings());count={h:0 for h in r0}
+        solver=RangeGame(root,(r0,r1),Settings());count={h:0 for h in r0}
         for _ in range(9000):
             hands,runout=solver.sample_deal();count[hands[0]]+=1
             self.assertEqual(len(set((*hands[0],*hands[1],*runout))),9)
         self.assertAlmostEqual(count[tuple(sorted(cards('AsAh')))]/9000,1/3,delta=.02)
 
-    def test_no_future_information_leak_and_recall(self):
-        solver=self.small('bucketed');root=State(2,(99,99),cards('2c 7d 9h'));solver.root=root
-        hand=next(iter(solver.ranges[0]));k0=solver.info_key(root,hand)
-        turn=act(act(root,'check'),'check').deal(cards('Ts')[0]);k1=solver.info_key(turn,hand)
-        self.assertEqual(k0[2][0],k1[2][0]);self.assertEqual(len(k1[2]),2)
-
-    def test_tree_budget_returns_partial_state(self):
-        solver=self.small();solver.settings=Settings(mode='exact',max_nodes=1)
-        self.assertEqual(solver.train(50)['status'],'node_limit')
-
-    def test_real_memory_exhaustion_retains_results_and_can_resume(self):
-        solver = self.small()
-        solver.train(25)
-        before = solver.inspect([])
-        with patch.object(solver, 'sample_deal', side_effect=MemoryError):
-            result = solver.train(25)
-        self.assertEqual(result['status'], 'memory_exhausted')
-        self.assertEqual(result['iterations'], 25)
-        self.assertEqual(before, solver.inspect([]))
-        self.assertEqual(solver.train(25)['status'], 'complete')
-        self.assertEqual(solver.iterations, 50)
-
-    def test_blocked_selected_hand(self):
-        solver=self.small();solver.train(20)
-        self.assertIn('selected_error',solver.inspect([],cards('2c As')))
-        with self.assertRaises(ValueError):solver.inspect(['bet:9999'])
+    def test_ranges_need_a_compatible_private_deal(self):
+        root = State(2, (3, 3), cards('2c 7d 9h'))
+        for ranges in (({}, parse_range('AA')), (parse_range('AsAh'), parse_range('AsAd'))):
+            with self.assertRaises(ValueError):
+                RangeGame(root, ranges, Settings())
 
 
 if __name__=='__main__':unittest.main()

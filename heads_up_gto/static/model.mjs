@@ -8,7 +8,7 @@ export function trainingLimit(mode, iterations, seconds) {
     if(!Number.isFinite(seconds) || seconds <= 0 || seconds > Number.MAX_SAFE_INTEGER)throw new Error('Enter a positive time limit in seconds.');
     return {time_limit_seconds:seconds};
   }
-  if(mode !== 'iterations' || !Number.isSafeInteger(iterations) || iterations < 10)throw new Error('Enter a whole number of at least 10 iterations.');
+  if(mode !== 'iterations' || !Number.isSafeInteger(iterations) || iterations < 1)throw new Error('Enter a whole number of at least 1 neural round.');
   return {iterations};
 }
 

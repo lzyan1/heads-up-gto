@@ -1,23 +1,17 @@
-"""Optional neural tests: run with pip install '.[deep]' to exercise them."""
-import importlib.util
+"""Deep CFR learning, representation, bounded memory and resume validation."""
 import json
 from dataclasses import replace
-import subprocess
-import sys
 import unittest
 from unittest.mock import patch
 
 from heads_up_gto.cards import parse_cards, parse_range
 from heads_up_gto.game import Settings, State
-from heads_up_gto.backends import create_solver
 from heads_up_gto.diagnostics import river_exploitability
 
-HAS_DEEP = all(importlib.util.find_spec(name) is not None for name in ("torch", "numpy"))
-if HAS_DEEP:
-    import numpy as np
-    import torch
-    from heads_up_gto.deep_cfr import (DeepCFRSolver, FEATURES, MAX_ACTIONS, Reservoir,
-                                       encode, regret_match, weighted_loss)
+import numpy as np
+import torch
+from heads_up_gto.deep_cfr import (DeepCFRSolver, FEATURES, MAX_ACTIONS, Reservoir,
+                                   encode, regret_match, weighted_loss)
 
 
 def root():
@@ -28,42 +22,29 @@ def ranges():
     return parse_range('AsAh,6s6h'), parse_range('KsKh,5s5h')
 
 
-class BackendTests(unittest.TestCase):
-    def test_dependency_free_default_and_actionable_optional_error(self):
-        code = """
-from heads_up_gto.backends import create_solver
-from heads_up_gto.game import Settings, State
-from heads_up_gto.cards import parse_cards, parse_range
-r = State(2, (3,3), parse_cards('2c 7d 9h Js Qc'), street=2)
-ranges = (parse_range('AsAh'), parse_range('KsKh'))
-s = create_solver(r, ranges, Settings())
-assert s.train(1)['iterations'] == 1
-try:
-    create_solver(r, ranges, Settings(mode='exact', backend='deep_cfr'))
-except ValueError as exc:
-    assert "pip install '.[deep]'" in str(exc)
-else:
-    raise AssertionError('Optional dependency was not checked')
-"""
-        subprocess.run([sys.executable, '-S', '-c', code], check=True, capture_output=True)
+class ConfigurationTests(unittest.TestCase):
+    def test_defaults_and_removed_solver_options(self):
+        settings = Settings.from_dict({})
+        self.assertEqual(settings.deep_device, 'cpu')
+        for name, value in dict(backend='tabular', mode='exact', chance_mode='sampled',
+                                max_nodes=None, buckets=8, equity_samples=24).items():
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'Unknown settings'):
+                Settings.from_dict({name: value})
 
-    def test_settings_reject_unbounded_or_incompatible_neural_configuration(self):
-        base = dict(backend='deep_cfr', mode='exact')
+    def test_settings_reject_unbounded_or_invalid_neural_configuration(self):
         for changes in (dict(deep_buffer_size=100001), dict(deep_hidden=True),
-                        dict(deep_device='cuda'), dict(mode='bucketed'),
-                        dict(chance_mode='enumerate_turns'), dict(max_nodes=10)):
+                        dict(deep_device='cuda'), dict(seed=True)):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
-                Settings.from_dict({**base, **changes})
+                Settings.from_dict(changes)
         for state in (replace(root(), pending=True), replace(root(), terminal='showdown'),
                       replace(root(), street=0), replace(root(), street=-1)):
             with self.subTest(state=state), self.assertRaisesRegex(ValueError, 'active flop, turn or river'):
-                create_solver(state, ranges(), Settings(**base))
+                DeepCFRSolver(state, ranges(), Settings())
 
 
-@unittest.skipUnless(HAS_DEEP, 'Install .[deep] for neural validation')
 class DeepCFRTests(unittest.TestCase):
     def solver(self, root_state=None, **kwargs):
-        configuration = dict(backend='deep_cfr', mode='exact', deep_hidden=32,
+        configuration = dict(deep_hidden=32,
                              deep_buffer_size=256, deep_traversals=8, deep_train_steps=8,
                              deep_batch_size=16, deep_inference_batch=4)
         return DeepCFRSolver(root_state or root(), ranges(), Settings(**{**configuration, **kwargs}))
@@ -226,6 +207,59 @@ class DeepCFRTests(unittest.TestCase):
         self.assertEqual(len(limited.nodes), 1)
         self.assertTrue(limited.inspect([])['neural']['tracking_saturated'])
         self.assertTrue(limited.stats()['prediction_ready'])
+
+    def test_timed_pauses_get_fresh_budgets_and_resume_the_same_work(self):
+        full, resumed = self.solver(), self.solver()
+        full.train(1)
+        clock = [100.0]
+        collect = resumed._collect
+        def timed_collect(player, iteration):
+            for result in collect(player, iteration):
+                clock[0] += .3
+                yield result
+        resumed._collect = timed_collect
+        with patch('heads_up_gto.deep_cfr.time.monotonic', side_effect=lambda: clock[0]):
+            first = resumed.train(time_limit_seconds=.5)
+            second = resumed.train(time_limit_seconds=.5)
+        self.assertEqual((first['run_seconds'], second['run_seconds']), (.6, .6))
+        self.assertEqual(second['seconds'], 1.2)
+        self.assertTrue(second['pending_round'])
+        resumed._collect = collect
+        resumed.train(1)
+        self.assertEqual(full.completed_traversals, resumed.completed_traversals)
+        for a, b in zip(full.average_models, resumed.average_models):
+            for pa, pb in zip(a.parameters(), b.parameters()):
+                torch.testing.assert_close(pa, pb, rtol=0, atol=0)
+
+    def test_budget_validation_and_manual_stop(self):
+        solver = self.solver()
+        for kwargs in ({}, {'iterations': 1, 'time_limit_seconds': 1}, {'iterations': 0},
+                       {'time_limit_seconds': 0}, {'time_limit_seconds': -1},
+                       {'time_limit_seconds': float('nan')}, {'time_limit_seconds': float('inf')},
+                       {'time_limit_seconds': True}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                solver.train(**kwargs)
+        solver.cancel.set()
+        self.assertEqual(solver.train(time_limit_seconds=10)['status'], 'cancelled')
+        self.assertEqual(solver.iterations, 0)
+
+    def test_failed_round_retains_published_policy(self):
+        solver = self.solver()
+        solver.train(1)
+        before = solver.inspect([])
+        with patch.object(solver, '_deal', side_effect=MemoryError):
+            with self.assertRaises(MemoryError):
+                solver.train(1)
+        self.assertEqual(solver.stats()['status'], 'error')
+        self.assertEqual(solver.inspect([]), before)
+        with self.assertRaisesRegex(ValueError, 'new solve or refinement'):
+            solver.train(1)
+
+    def test_blocked_selected_hand_and_illegal_path(self):
+        solver = self.solver()
+        self.assertIn('selected_error', solver.inspect([], parse_cards('2c As')))
+        with self.assertRaises(ValueError):
+            solver.inspect(['bet:9999'])
 
     def test_exact_river_exploitability_improves(self):
         solver = self.solver(deep_hidden=64, deep_buffer_size=4000, deep_traversals=64,

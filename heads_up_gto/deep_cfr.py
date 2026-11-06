@@ -14,15 +14,15 @@ from dataclasses import dataclass
 import math
 import random
 import time
+import threading
 
 import numpy as np
 import torch
 from torch import nn
 
 from .cards import score
-from .backends import validate_neural_root
 from .game import Settings
-from .solver import Solver
+from .range_game import RangeGame
 
 MAX_ACTIONS = 5
 MAX_HISTORY = 32
@@ -136,15 +136,25 @@ class SampleCounts:
     averages: int = 0
 
 
-class DeepCFRSolver(Solver):
+class DeepCFRSolver(RangeGame):
     def __init__(self, root, ranges, settings):
         Settings.from_dict(vars(settings))
-        if settings.backend != "deep_cfr":
-            raise ValueError("Deep CFR requires backend deep_cfr.")
-        validate_neural_root(root)
+        if (root.street not in (0, 1, 2) or len(root.board) != root.street + 3
+                or root.pending or root.terminal):
+            raise ValueError("Deep CFR starts at an active flop, turn or river decision.")
         super().__init__(root, ranges, settings)
         if settings.deep_device == "mps" and not torch.backends.mps.is_available():
             raise ValueError("MPS is unavailable in this Python environment. Choose CPU or install an MPS-enabled PyTorch build.")
+        self.nodes = {}  # bounded visit counters, never a strategy table
+        self.iterations = 0
+        self.attempted_iterations = 0
+        self.completed_traversals = [0, 0]
+        self._visits = 0
+        self.elapsed = 0.0
+        self.run_elapsed = 0.0
+        self.time_limit_seconds = None
+        self.status = "ready"
+        self.cancel = threading.Event()
         self.device = torch.device(settings.deep_device)
         self.scale = max(1.0, root.base_pot / 2 + max(root.start_stacks))
         self.advantage_memory = [Reservoir(settings.deep_buffer_size, settings.seed + 100 + p) for p in (0, 1)]
@@ -340,7 +350,12 @@ class DeepCFRSolver(Solver):
 
     def stats(self, target=None):
         memories = self.advantage_memory + self.strategy_memory
-        return {**super().stats(target), "backend": "deep_cfr", "device": str(self.device),
+        return {"status": self.status, "iterations": self.iterations, "target": target,
+                "nodes": len(self.nodes), "seconds": round(self.elapsed, 2),
+                "run_seconds": round(self.run_elapsed, 2), "time_limit_seconds": self.time_limit_seconds,
+                "attempted_iterations": self.attempted_iterations,
+                "completed_traversals": list(self.completed_traversals), "tree_visits": self._visits,
+                "exploitability": None, "backend": "deep_cfr", "device": str(self.device),
                 "policy_update": "alternating_deep_cfr", "iteration_unit": "neural rounds",
                 "phase": self.phase, "phase_step": self.phase_step, "phase_total": self.phase_total,
                 "pending_round": self.attempted_iterations > self.iterations,
@@ -391,6 +406,13 @@ class DeepCFRSolver(Solver):
         return response
 
     def coverage_diagnostics(self):
-        return {**super().coverage_diagnostics(), "scope": "bounded exact-state visit counters; may exclude visited states after tracking saturates",
+        from .diagnostics import sample_summary
+        from .game import STREETS
+        streets = {name: sample_summary(
+            {"updates": counts.updates, "averages": counts.averages}
+            for key, counts in self.nodes.items() if len(key[3]) - 3 == street)
+            for street, name in enumerate(STREETS)}
+        return {"streets": streets,
+                "scope": "bounded exact-state visit counters; may exclude visited states after tracking saturates",
                 "tracking_saturated": self.tracking_saturated,
                 "notice": "Predictions do not count as direct sampling or verified convergence."}

@@ -1,6 +1,6 @@
-"""Equal-time tabular/Deep CFR comparison; exact exploitability on tiny rivers.
+"""Equal-time Deep CFR CPU/GPU comparison; exact exploitability on tiny rivers.
 
-Run from the repository with PYTHONPATH=. and the optional .[deep] dependencies.
+Run from the repository with PYTHONPATH=. and the project dependencies.
 Flop/turn results report sampling/predictions only, not an exploitability estimate.
 """
 import argparse
@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 import platform
 
-from heads_up_gto.backends import create_solver
+from heads_up_gto.deep_cfr import DeepCFRSolver
 from heads_up_gto.cards import parse_cards, parse_range
 from heads_up_gto.diagnostics import river_exploitability
 from heads_up_gto.game import Settings, State
@@ -29,18 +29,15 @@ def main():
     results = {'platform': platform.platform(), 'street': args.street,
                'requested_seconds_per_run': args.seconds, 'runs': [],
                'notice': 'Small diagnostic game only; these results do not establish full-game strength.'}
-    try:
-        import torch
-        results['torch_version'] = torch.__version__
-        results['mps_available'] = torch.backends.mps.is_available()
-    except ImportError:
-        pass
+    import torch
+    results['torch_version'] = torch.__version__
+    results['mps_available'] = torch.backends.mps.is_available()
     for seed in args.seeds:
-        for backend, device in [('tabular', 'cpu'), *(('deep_cfr', d) for d in args.devices)]:
-            settings = Settings(mode='exact', backend=backend, deep_device=device, seed=seed)
-            record = {'backend': backend, 'device': device, 'seed': seed, 'settings': asdict(settings)}
+        for device in args.devices:
+            settings = Settings(deep_device=device, seed=seed)
+            record = {'backend': 'deep_cfr', 'device': device, 'seed': seed, 'settings': asdict(settings)}
             try:
-                solver = create_solver(root, ranges, settings)
+                solver = DeepCFRSolver(root, ranges, settings)
             except ValueError as exc:
                 record['unavailable'] = str(exc)
             else:
