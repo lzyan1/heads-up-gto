@@ -174,6 +174,26 @@ Only one process may write a particular dataset directory at a time.
 
 This script generates data only. It does not fit a network or alter Deep CFR.
 
+## Full-width postflop DCFR (experimental, `cfr+` branch)
+
+`heads_up_gto/postflop_cfr.py` (`PostflopCFR`) solves a flop, turn or river root over the whole
+remaining game with no neural networks and no sampling. Every hand is an array element and every
+dealt card is a leading "context" axis, so one traversal updates all hands in all runouts.
+All-ins before the river deal every remaining card set. The algorithm is the DCFR variant used
+by b-inary/postflop-solver (`algorithm='cfr+'` is also available).
+
+```python
+from heads_up_gto.postflop_cfr import PostflopCFR
+solver = PostflopCFR(root_state, (oop_range, ip_range), Settings(...))   # raises if too big
+solver.solve(iterations=1000, target_exploitability=0.001 * root_state.pot)
+solver.strategy(['check', 'bet:10.5', 'call', '9s'])   # (actions, [actions, hands] probabilities)
+```
+
+Memory is the practical limit, because regrets and strategies are stored for every river runout
+(`solver.memory_bytes`, guarded by `max_bytes`). Turn roots are comfortable; flop roots need
+narrow ranges or a small betting tree. `benchmarks/postflop_full_compare.py` checks values and
+latency against postflop-solver (build `benchmarks/postflop_cli` with cargo first).
+
 ## Solver implementation
 
 - `deep_cfr.py`: deterministic greedy flop/turn policies, sampled advantage

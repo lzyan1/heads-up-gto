@@ -27,24 +27,35 @@ fn main() {
     let card_config = CardConfig {
         range: [range_from(&spot["oop"]), range_from(&spot["ip"])],
         flop: flop_from_str(&board[..3].concat()).unwrap(),
-        turn: card_from_str(board[3]).unwrap(),
-        river: card_from_str(board[4]).unwrap(),
+        turn: board.get(3).map_or(NOT_DEALT, |c| card_from_str(c).unwrap()),
+        river: board.get(4).map_or(NOT_DEALT, |c| card_from_str(c).unwrap()),
     };
-    let bets = BetSizeOptions::try_from((
-        spot["bets"].as_str().unwrap(),
-        spot["raises"].as_str().unwrap(),
-    ))
-    .unwrap();
+    let initial_state = match board.len() {
+        3 => BoardState::Flop,
+        4 => BoardState::Turn,
+        _ => BoardState::River,
+    };
+    // "bets" is either one string for every street or [flop, turn, river].
+    let raises = spot["raises"].as_str().unwrap();
+    let per_street: Vec<BetSizeOptions> = (0..3)
+        .map(|i| {
+            let text = match spot["bets"].as_array() {
+                Some(list) => list[i].as_str().unwrap(),
+                None => spot["bets"].as_str().unwrap(),
+            };
+            BetSizeOptions::try_from((text, raises)).unwrap()
+        })
+        .collect();
     let pot = spot["pot"].as_i64().unwrap() as i32;
     let tree_config = TreeConfig {
-        initial_state: BoardState::River,
+        initial_state,
         starting_pot: pot,
         effective_stack: spot["stack"].as_i64().unwrap() as i32,
         rake_rate: 0.0,
         rake_cap: 0.0,
-        flop_bet_sizes: [bets.clone(), bets.clone()],
-        turn_bet_sizes: [bets.clone(), bets.clone()],
-        river_bet_sizes: [bets.clone(), bets],
+        flop_bet_sizes: [per_street[0].clone(), per_street[0].clone()],
+        turn_bet_sizes: [per_street[1].clone(), per_street[1].clone()],
+        river_bet_sizes: [per_street[2].clone(), per_street[2].clone()],
         turn_donk_sizes: None,
         river_donk_sizes: None,
         add_allin_threshold: spot["add_allin_threshold"].as_f64().unwrap(),
