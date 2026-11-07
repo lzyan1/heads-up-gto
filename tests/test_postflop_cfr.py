@@ -1,5 +1,6 @@
 """Full-tree DCFR: chance nodes and runouts against brute force, river parity, convergence."""
 from itertools import combinations
+import importlib.util
 import random
 import unittest
 
@@ -11,6 +12,8 @@ from heads_up_gto.game import Settings, State
 from heads_up_gto.postflop_cfr import PostflopCFR
 
 TREE = dict(raise_multiplier=1e6, max_raises=2, include_all_in=True)  # raises are all-in only
+HAS_NUMBA = importlib.util.find_spec('numba') is not None
+ENGINES = ['numpy'] + (['numba'] if HAS_NUMBA else [])
 
 
 def random_ranges(board, sizes, seed):
@@ -54,9 +57,12 @@ def reference_uniform_value(root, ranges, settings):
 class PostflopCFRTests(unittest.TestCase):
     def check_uniform(self, root, settings, sizes, seed):
         ranges = random_ranges(root.board, sizes, seed)
-        solver = PostflopCFR(root, ranges, settings)
-        value = solver.exploitability()[1]  # empty strategy sums = uniform play
-        self.assertAlmostEqual(value, reference_uniform_value(root, ranges, settings), places=9)
+        expected = reference_uniform_value(root, ranges, settings)
+        for engine in ENGINES:
+            with self.subTest(engine=engine):
+                solver = PostflopCFR(root, ranges, settings, engine=engine, dtype=np.float64)
+                value = solver.exploitability()[1]  # empty strategy sums = uniform play
+                self.assertAlmostEqual(value, expected, places=9)
 
     def test_turn_chance_matches_brute_force(self):
         root = State(12, (30, 30), parse_cards('As Kd 7c 2h'), street=1)
@@ -73,15 +79,17 @@ class PostflopCFRTests(unittest.TestCase):
         root = State(8, (4, 4), parse_cards('Qh 9d 4s 2c'), street=1)
         ranges = random_ranges(root.board, (6, 6), 5)
         ranges[1].update(dict(list(ranges[0].items())[:3]))
-        solver = PostflopCFR(root, ranges, Settings(sizes=((), (.5,), (1.,)), **TREE))
-        ref = reference_uniform_value(root, ranges, Settings(sizes=((), (.5,), (1.,)), **TREE))
-        self.assertAlmostEqual(solver.exploitability()[1], ref, places=9)
+        settings = Settings(sizes=((), (.5,), (1.,)), **TREE)
+        ref = reference_uniform_value(root, ranges, settings)
+        for engine in ENGINES:
+            solver = PostflopCFR(root, ranges, settings, engine=engine, dtype=np.float64)
+            self.assertAlmostEqual(solver.exploitability()[1], ref, places=9, msg=engine)
 
     def test_river_root_matches_single_river_solver(self):
         settings = Settings(sizes=((), (), (.33, 1.)), **TREE)
         root = State(21, (89.5, 89.5), parse_cards('As Kd 7c 2h 3d'), street=2)
         ranges = random_ranges(root.board, (60, 60), 3)
-        full = PostflopCFR(root, ranges, settings).solve(iterations=40, check_every=1000)
+        full = PostflopCFR(root, ranges, settings, dtype=np.float64).solve(iterations=40, check_every=1000)
         single = CFRPlusRiver(root, ranges, settings).solve(iterations=40, check_every=1000)
         self.assertAlmostEqual(full.stats['value_bb'], single.stats['value_bb'], places=8)
         self.assertAlmostEqual(full.stats['exploitability_bb'], single.stats['exploitability_bb'], places=8)
@@ -89,23 +97,63 @@ class PostflopCFRTests(unittest.TestCase):
     def test_turn_solve_converges_and_strategy_is_a_distribution(self):
         settings = Settings(sizes=((), (.5,), (1.,)), **TREE)
         root = State(21, (60, 60), parse_cards('As Kd 7c 2h'), street=1)
-        solver = PostflopCFR(root, random_ranges(root.board, (25, 25), 4), settings)
-        solver.solve(iterations=600, target_exploitability=.01 * 21)
-        self.assertLess(solver.stats['exploitability_bb'], .01 * 21)
-        actions, probs = solver.strategy([])
-        np.testing.assert_allclose(probs.sum(axis=0), 1., atol=1e-9)
-        # Walk down an action, then past the street change by naming the river card.
-        later = solver.strategy(['check', 'check', '9s'])[1]
-        np.testing.assert_allclose(later.sum(axis=0), 1., atol=1e-9)
+        for engine in ENGINES:  # default dtype: float32 for numba
+            with self.subTest(engine=engine):
+                solver = PostflopCFR(root, random_ranges(root.board, (25, 25), 4), settings, engine=engine)
+                solver.solve(iterations=600, target_exploitability=.01 * 21)
+                self.assertLess(solver.stats['exploitability_bb'], .01 * 21)
+                actions, probs = solver.strategy([])
+                np.testing.assert_allclose(probs.sum(axis=0), 1., atol=1e-6)
+                # Walk down an action, then past the street change by naming the river card.
+                later = solver.strategy(['check', 'check', '9s'])[1]
+                np.testing.assert_allclose(later.sum(axis=0), 1., atol=1e-6)
+
+    @unittest.skipUnless(HAS_NUMBA, 'numba not installed')
+    def test_compiled_hand_evaluator_matches_python(self):
+        from heads_up_gto._postflop_kernels import _score7
+        from heads_up_gto.cards import evaluate
+
+        def encoded(t):
+            t = list(t) + [0] * (6 - len(t))
+            return (t[0] << 20) | (t[1] << 16) | (t[2] << 12) | (t[3] << 8) | (t[4] << 4) | t[5]
+
+        rng = random.Random(1)
+        low = [c for c in range(52) if c // 4 in (12, 0, 1, 2, 3, 4, 5, 6)]  # ace and 2-8: wheels, steel wheels
+        for pool in (list(range(52)), low):
+            for _ in range(20000):
+                cards = rng.sample(pool, 7)
+                self.assertEqual(int(_score7(np.asarray(cards, np.int64))), encoded(evaluate(tuple(sorted(cards)))), cards)
+
+    @unittest.skipUnless(HAS_NUMBA, 'numba not installed')
+    def test_numba_engine_matches_numpy_engine(self):
+        cases = [  # (root, settings, hands, iterations): river, turn and flop roots
+            (State(21, (89.5, 89.5), parse_cards('As Kd 7c 2h 3d'), street=2),
+             Settings(sizes=((), (), (.33, 1.)), **TREE), (50, 70), 40),
+            (State(21, (60, 60), parse_cards('As Kd 7c 2h'), street=1),
+             Settings(sizes=((), (.5,), (1.,)), **TREE), (30, 30), 30),
+            (State(10, (3, 3), parse_cards('As Kd 7c'), street=0),
+             Settings(sizes=((.5,), (.5,), (.5,)), **TREE), (6, 6), 30)]
+        for root, settings, sizes, iterations in cases:
+            ranges = random_ranges(root.board, sizes, 11)
+            runs = [PostflopCFR(root, ranges, settings, engine=e, dtype=np.float64).solve(
+                iterations=iterations, check_every=1000) for e in ('numpy', 'numba')]
+            with self.subTest(street=root.street):
+                self.assertAlmostEqual(runs[0].stats['value_bb'], runs[1].stats['value_bb'], places=7)
+                self.assertAlmostEqual(runs[0].stats['exploitability_bb'], runs[1].stats['exploitability_bb'], places=7)
+                for a, b in zip(runs[0].hand_values(), runs[1].hand_values()):
+                    np.testing.assert_allclose(a, b, atol=1e-6, equal_nan=True)
+                np.testing.assert_allclose(runs[0].strategy([])[1], runs[1].strategy([])[1], atol=1e-6)
 
     def test_flop_solve_decreases_exploitability(self):
         settings = Settings(sizes=((.5,), (.5,), (.5,)), **TREE)
         root = State(10, (3, 3), parse_cards('As Kd 7c'), street=0)
-        solver = PostflopCFR(root, random_ranges(root.board, (6, 6), 6), settings)
-        solver.solve(iterations=200, check_every=20)
-        history = [e for _, _, e in solver.stats['history']]
-        self.assertLess(history[-1], history[0])
-        self.assertLess(history[-1], .02 * root.pot)
+        for engine in ENGINES:
+            with self.subTest(engine=engine):
+                solver = PostflopCFR(root, random_ranges(root.board, (6, 6), 6), settings, engine=engine)
+                solver.solve(iterations=200, check_every=20)
+                history = [e for _, _, e in solver.stats['history']]
+                self.assertLess(history[-1], history[0])
+                self.assertLess(history[-1], .02 * root.pot)
 
     def test_memory_guard_and_input_validation(self):
         settings = Settings(sizes=((), (.5,), (1.,)), **TREE)

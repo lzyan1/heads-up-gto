@@ -189,6 +189,14 @@ solver.solve(iterations=1000, target_exploitability=0.001 * root_state.pot)
 solver.strategy(['check', 'bet:10.5', 'call', '9s'])   # (actions, [actions, hands] probabilities)
 ```
 
+Two engines share the same tree and tests. `engine='numpy'` is the readable reference
+(float64). `engine='numba'` (the default when `pip install -e '.[fast]'` is done) flattens the tree
+into integer tables and runs each runout's subtree in compiled, threaded kernels on cache-resident
+vectors, in float32 by default. It is about 30x faster than the numpy engine (the first call
+compiles for several seconds, cached afterwards), within roughly 2x of postflop-solver, and agrees
+with the numpy engine to rounding on river, turn and flop roots. It uses the performance cores
+(`threads=` overrides).
+
 Memory is the practical limit, because regrets and strategies are stored for every river runout
 (`solver.memory_bytes`, guarded by `max_bytes`). Turn roots are comfortable; flop roots need
 narrow ranges or a small betting tree. `benchmarks/postflop_full_compare.py` checks values and

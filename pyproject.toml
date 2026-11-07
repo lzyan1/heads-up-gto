@@ -9,6 +9,9 @@ description = "Heads-up study with deterministic early streets and direct river 
 requires-python = ">=3.11"
 dependencies = ["numpy>=1.26,<3", "torch>=2.6,<3", "scipy>=1.11,<2"]
 
+[project.optional-dependencies]
+fast = ["numba>=0.63"]  # compiled, threaded engine for PostflopCFR (engine="auto" uses it when present)
+
 [project.scripts]
 heads-up-gto = "heads_up_gto.server:main"
 

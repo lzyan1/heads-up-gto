@@ -44,6 +44,29 @@ import numpy as np
 from .cards import combo_text, parse_cards, remove_blocked, score
 
 
+def _performance_cores():
+    """Threads for the compiled engine: performance cores on Apple silicon (efficiency cores slow
+    the slowest chunk), otherwise every core."""
+    import os
+    import subprocess
+    import sys
+    if sys.platform == 'darwin':
+        try:
+            return int(subprocess.run(['sysctl', '-n', 'hw.perflevel0.logicalcpu'], capture_output=True,
+                                      text=True, timeout=5, check=True).stdout)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+    return os.cpu_count() or 1
+
+
+def _numba_available():
+    try:
+        import numba  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 class _Decision:
     kind = 'decision'
     __slots__ = ('state', 'actor', 'actions', 'children', 'index', 'contexts')
@@ -65,16 +88,24 @@ class _Showdown:
 
 
 class PostflopCFR:
-    def __init__(self, root, ranges, settings, algorithm='dcfr', dtype=np.float64, max_bytes=8 * 2 ** 30):
+    def __init__(self, root, ranges, settings, algorithm='dcfr', dtype=None, max_bytes=8 * 2 ** 30,
+                 engine='auto', threads=None):
         if algorithm not in ('dcfr', 'cfr+'):
             raise ValueError("algorithm must be 'dcfr' or 'cfr+'.")
+        if engine not in ('auto', 'numba', 'numpy'):
+            raise ValueError("engine must be 'auto', 'numba' or 'numpy'.")
+        if engine == 'auto':
+            engine = 'numba' if _numba_available() else 'numpy'
+        elif engine == 'numba' and not _numba_available():
+            raise ImportError("engine='numba' needs numba: pip install numba (or pip install -e '.[fast]').")
+        self.engine = engine
         if root.terminal or root.pending or root.street not in (0, 1, 2) or len(root.board) != 3 + root.street:
             raise ValueError('An active decision on the flop, turn or river with a matching board is required.')
         if len(ranges) != 2 or any(not math.isfinite(w) or w < 0 for r in ranges for w in r.values()):
             raise ValueError('Two ranges with nonnegative finite weights are required.')
         start = time.perf_counter()
         self.root, self.settings, self.algorithm = root, settings, algorithm
-        self.dtype = np.dtype(dtype)
+        self.dtype = np.dtype(dtype if dtype is not None else (np.float32 if engine == 'numba' else np.float64))
         ranges = [remove_blocked(r, root.board) for r in ranges]
         if any(not r for r in ranges):
             raise ValueError('Both players need an unblocked range.')
@@ -113,22 +144,26 @@ class PostflopCFR:
         for leaf in self._showdowns:
             self._prep_boards.setdefault(leaf.boards.tobytes(), leaf.boards)
         item = self.dtype.itemsize
-        live_bytes = sum(c['live'].nbytes for c in self._outcomes.values())
-        prep_bytes = sum(len(b) * n * 4 * 9 for b in self._prep_boards.values())
+        live_bytes = sum(c['live'].nbytes for c in self._outcomes.values() if c['live'] is not None)
+        prep_bytes = sum(len(b) * n * 4 * (4 if engine == 'numba' else 9) for b in self._prep_boards.values())
         largest = max([d.contexts for d in self.decisions] + [len(b) for b in self._prep_boards.values()] + [1])
-        self.memory_bytes = int(self._regret_bytes * item + live_bytes + prep_bytes + 24 * largest * n * 8)
+        transient = 24 * largest * n * 8 if engine == 'numpy' else 96 * 2 ** 20
+        self.memory_bytes = int(self._regret_bytes * item + live_bytes + prep_bytes + transient)
         if self.memory_bytes > max_bytes:
             raise ValueError(
                 f'This solve needs about {self.memory_bytes / 2 ** 30:.1f} GiB (limit {max_bytes / 2 ** 30:.1f} GiB). '
                 'Narrow the ranges, use dtype=np.float32, shrink the betting tree, or start from a later street.')
-        self.regret = [np.zeros((len(d.actions), d.contexts, n), self.dtype) for d in self.decisions]
-        self.strategy_sum = [np.zeros_like(r) for r in self.regret]
-        self._prepare_showdowns()
+        if engine == 'numpy':
+            self.regret = [np.zeros((len(d.actions), d.contexts, n), self.dtype) for d in self.decisions]
+            self.strategy_sum = [np.zeros_like(r) for r in self.regret]
+        built = self._prepare_showdowns()
+        if engine == 'numba':
+            self._init_numba(built, threads)
         self.iterations = 0
         contexts = max([d.contexts for d in self.decisions] + [1])
         self.stats = {'private_hands': n, 'public_decisions': len(self.decisions),
                       'chance_nodes': self._chance_count, 'showdown_leaves': len(self._showdowns),
-                      'max_contexts': contexts, 'memory_bytes': self.memory_bytes,
+                      'max_contexts': contexts, 'memory_bytes': self.memory_bytes, 'engine': engine,
                       'build_seconds': time.perf_counter() - start}
 
     # ------------------------------------------------------------------ tree
@@ -144,11 +179,14 @@ class PostflopCFR:
                                        dtype=np.int64))
             cards = np.concatenate(rows)
             per_parent = len(rows[0])
-            blocked = self.has[cards[:, 0]].copy()
-            for j in range(1, draw):
-                blocked |= self.has[cards[:, j]]
+            live = None
+            if self.engine == 'numpy':  # the numba kernels test dealt cards directly
+                blocked = self.has[cards[:, 0]].copy()
+                for j in range(1, draw):
+                    blocked |= self.has[cards[:, j]]
+                live = (~blocked).astype(self.dtype)
             found = self._outcomes[key] = dict(
-                cards=cards, per_parent=per_parent, live=(~blocked).astype(self.dtype),
+                cards=cards, per_parent=per_parent, live=live,
                 boards=np.concatenate((np.repeat(boards, per_parent, axis=0), cards), axis=1))
         return found
 
@@ -213,7 +251,28 @@ class PostflopCFR:
         return (order, order[columns], lo, hi, self._s1 + count[c1, lo], self._s2 + count[c2, lo],
                 self._s1 + count[c1, hi], self._s2 + count[c2, hi])
 
+    def _prepare_showdowns_compiled(self):
+        """Hands in strength order for every distinct board (numba engine), all boards at once."""
+        from . import _postflop_kernels as kernels
+        keys = list(self._prep_boards)
+        rows = [np.sort(self._prep_boards[k], axis=1) for k in keys]
+        unique, inverse = np.unique(np.concatenate(rows), axis=0, return_inverse=True)
+        inverse = inverse.reshape(-1)
+        strength = kernels.board_strengths(np.ascontiguousarray(unique), self.cards)
+        order = np.argsort(strength, axis=1, kind='stable')
+        ordered = np.take_along_axis(strength, order, 1)
+        group_end = np.stack([np.searchsorted(r, r, 'right') for r in ordered])
+        # one row per context: [order | card x | card y | group end], hands in strength order
+        packed = np.concatenate((order, self._c1[order], self._c2[order], group_end), axis=1).astype(np.int32)
+        built, start = {}, 0
+        for key, r in zip(keys, rows):
+            built[key] = packed[inverse[start:start + len(r)]]
+            start += len(r)
+        return built
+
     def _prepare_showdowns(self):
+        if self.engine == 'numba':
+            return self._prepare_showdowns_compiled()
         unique, built = {}, {}
         for key, boards in self._prep_boards.items():
             parts = []
@@ -222,9 +281,128 @@ class PostflopCFR:
                 if b not in unique:
                     unique[b] = tuple(a.astype(np.int32) for a in self._board_prep(b))
                 parts.append(unique[b])
-            built[key] = tuple(np.stack([p[i] for p in parts]) for i in range(8))
+            built[key] = tuple(np.stack([p[i] for p in parts]) for i in range(len(parts[0])))
         for leaf in self._showdowns:
             leaf.prep = built[leaf.boards.tobytes()]
+        return built
+
+    def _init_numba(self, built, threads):
+        """Flatten the public tree into the integer tables the compiled kernels walk."""
+        import numba
+        from . import _postflop_kernels as kernels
+        numba.set_num_threads(max(1, min(threads or _performance_cores(), numba.config.NUMBA_NUM_THREADS)))
+        n = self.size
+        offsets, total = [], 0
+        for d in self.decisions:
+            offsets.append(total)
+            total += d.contexts * len(d.actions) * n
+        self._decision_offsets = offsets
+        self._regret_flat = np.zeros(total, self.dtype)
+        self._strategy_flat = np.zeros(total, self.dtype)
+
+        blocks = []  # one per street betting tree: nodes in preorder, local child indices
+
+        def make_block(top):
+            blk = dict(nodes=[], kids=[], chance={})
+            blocks.append(blk)
+            bid = len(blocks) - 1
+
+            def visit(node):
+                local = len(blk['nodes'])
+                blk['nodes'].append(node)
+                blk['kids'].append(())
+                if node.kind == 'decision':
+                    blk['kids'][local] = tuple(visit(child) for child in node.children)
+                elif node.kind == 'chance':
+                    blk['chance'][local] = make_block(node.child)
+                return local
+
+            visit(top)
+            return bid
+
+        make_block(self.tree)
+        block_offset = np.cumsum([0] + [len(b['nodes']) for b in blocks])[:-1].astype(np.int32)
+        count = sum(len(b['nodes']) for b in blocks)
+        max_actions = max([len(d.actions) for d in self.decisions] + [1])
+        ntype = np.zeros(count, np.int8)
+        actor = np.zeros(count, np.int8)
+        nact = np.zeros(count, np.int32)
+        children = np.full((count, max_actions), -1, np.int32)
+        reg_off = np.zeros(count, np.int64)
+        pay = np.zeros((count, 2, 3))
+        ch_blk = np.zeros(count, np.int32)
+        ch_m = np.zeros(count, np.int32)
+        ch_draw = np.zeros(count, np.int32)
+        ch_w = np.zeros(count)
+        ch_cards = np.zeros(count, np.int64)
+        prep_off = np.zeros(count, np.int64)
+
+        cards_at, cards_parts, cards_total = {}, [], 0
+        prep_at, prep_parts, prep_total = {}, [], 0
+        kinds = {'decision': 0, 'fold': 1, 'showdown': 2, 'chance': 3}
+        for bid, blk in enumerate(blocks):
+            for local, node in enumerate(blk['nodes']):
+                g = block_offset[bid] + local
+                ntype[g] = kinds[node.kind]
+                if node.kind == 'decision':
+                    actor[g], nact[g] = node.actor, len(node.actions)
+                    children[g, :len(node.actions)] = blk['kids'][local]
+                    reg_off[g] = offsets[node.index]
+                elif node.kind == 'chance':
+                    ch_blk[g], ch_m[g], ch_draw[g] = blk['chance'][local], node.per_parent, node.draw
+                    ch_w[g] = node.weight
+                    if id(node.cards) not in cards_at:
+                        cards_at[id(node.cards)] = cards_total
+                        cards_parts.append(node.cards.astype(np.int32).ravel())
+                        cards_total += node.cards.size
+                    ch_cards[g] = cards_at[id(node.cards)]
+                else:
+                    state = node.state
+                    for player in (0, 1):
+                        if node.kind == 'fold':
+                            pay[g, player, 0] = state.payoff(state.winner, player)
+                        else:
+                            pay[g, player] = (state.payoff(player, player), state.payoff(1 - player, player),
+                                              state.payoff(-1, player))
+                    if node.kind == 'showdown':
+                        key = node.boards.tobytes()
+                        if key not in prep_at:
+                            prep_at[key] = prep_total
+                            prep_parts.append(built[key].astype(np.int32).ravel())
+                            prep_total += built[key].size
+                        prep_off[g] = prep_at[key]
+        built.clear()
+
+        def depth(bid):
+            return 1 + max([depth(child) for child in blocks[bid]['chance'].values()] + [-1])
+
+        if depth(0) > 2:
+            raise ValueError('The compiled engine supports at most three nested streets.')
+        self._D = 3
+        self._maxn = max(len(b['nodes']) for b in blocks)
+        self._maxa = max_actions
+        c1, c2 = self.cards[:, 0], self.cards[:, 1]
+        self._T = (ntype, actor, nact, children, reg_off, pay, ch_blk, ch_m, ch_draw, ch_w, ch_cards,
+                   prep_off, block_offset, np.asarray([len(b['nodes']) for b in blocks], np.int32),
+                   np.concatenate(cards_parts) if cards_parts else np.zeros(1, np.int32),
+                   np.concatenate(prep_parts) if prep_parts else np.zeros(1, np.int32),
+                   c1.astype(np.int64), c2.astype(np.int64), self._offset.astype(np.int64))
+        units = [(local, j) for local, node in enumerate(blocks[0]['nodes']) if node.kind == 'chance'
+                 for j in range(node.per_parent)]
+        self._unit_l = np.asarray([u[0] for u in units], np.int64)
+        self._unit_j = np.asarray([u[1] for u in units], np.int64)
+        self._unit_out = np.zeros((len(units), n), self.dtype)
+        self._nchunks = max(1, numba.get_num_threads())  # each chunk allocates its own scratch
+        self._kernels = kernels
+
+    def _run(self, player, mode, reach, discounts=(0., 0., 0.)):
+        """One compiled root evaluation: 0 train ``player``, 1 best response, 2 average-strategy value."""
+        out = np.empty(self.size, self.dtype)
+        self._kernels.eval_root(
+            self._T, np.ascontiguousarray(reach, dtype=self.dtype), out, player, mode, *map(float, discounts),
+            self._regret_flat, self._strategy_flat, self._unit_l, self._unit_j, self._unit_out,
+            self._nchunks, self._D, self._maxn, self._maxa)
+        return out
 
     def _legal(self, reach):
         """Opponent reach compatible with each own hand (no shared card), ``[K, N]``."""
@@ -340,6 +518,11 @@ class PostflopCFR:
 
         Evaluated on the average strategy.
         """
+        if self.engine == 'numba':
+            best = [float(self.weights[p] @ self._run(p, 1, self.weights[1 - p]).astype(np.float64)) / self.normalizer
+                    for p in (0, 1)]
+            value = float(self.weights[0] @ self._run(0, 2, self.weights[1]).astype(np.float64)) / self.normalizer
+            return max(0., (best[0] + best[1]) / 2), value, best
         reach = [w[None, :] for w in self.weights]
         best = [float(self.weights[p] @ self._best_response(self.tree, p, reach[1 - p])[0]) / self.normalizer
                 for p in (0, 1)]
@@ -358,7 +541,10 @@ class PostflopCFR:
             discounts = self._discounts(self.iterations)
             self.iterations += 1
             for p in (0, 1):
-                self._walk(self.tree, p, self._root_reach[1 - p], discounts)
+                if self.engine == 'numba':
+                    self._run(p, 0, self.weights[1 - p], discounts)
+                else:
+                    self._walk(self.tree, p, self._root_reach[1 - p], discounts)
             spent += time.perf_counter() - began
             done = time_limit_seconds is not None and spent > time_limit_seconds
             if self.iterations % check_every == 0 or done or step + 1 == iterations:
@@ -381,7 +567,10 @@ class PostflopCFR:
         out = []
         for p in (0, 1):
             reach = self.weights[1 - p][None, :]
-            cfv = self._policy_value(self.tree, p, reach)[0]
+            if self.engine == 'numba':
+                cfv = self._run(p, 2, self.weights[1 - p]).astype(np.float64)
+            else:
+                cfv = self._policy_value(self.tree, p, reach)[0]
             mass = self._legal(reach)[0]
             out.append(np.divide(cfv, mass, out=np.full(cfv.shape, np.nan), where=mass > 1e-12))
         return out
@@ -418,7 +607,16 @@ class PostflopCFR:
         node, k = self.locate(path)
         if node.kind != 'decision':
             raise ValueError('Not a decision node; add the dealt card or action to the path.')
-        return node.actions, self._average(node)[:, k, :]
+        return node.actions, self._average_at(node, k)
+
+    def _average_at(self, node, k):
+        if self.engine == 'numpy':
+            return self._average(node)[:, k, :]
+        a, n = len(node.actions), self.size
+        start = self._decision_offsets[node.index] + k * a * n
+        s = self._strategy_flat[start:start + a * n].reshape(a, n).astype(np.float64)
+        total = s.sum(axis=0)
+        return np.where(total > 1e-12, s / np.maximum(total, 1e-20), 1 / a)
 
     def hand_labels(self):
         return [combo_text(h) for h in self.hands]

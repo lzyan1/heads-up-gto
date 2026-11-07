@@ -3,7 +3,8 @@
 Turn-rooted and flop-rooted spots with random weighted ranges. Both solve the same game:
 one bet size per street, raises as all-in only ("allin") or no raises ("none"), all-in
 always available in "allin" mode. Amounts are integer chips of 0.01 BB; clock excludes
-exploitability checks. postflop-solver is native, multithreaded f32; this one is numpy.
+exploitability checks. postflop-solver is native, multithreaded f32; ours uses the compiled numba
+engine when installed (--engine numpy for the reference implementation).
 
 Build the Rust CLI once:  cd benchmarks/postflop_cli && cargo build --release
 Run:  PYTHONPATH=. .venv/bin/python benchmarks/postflop_full_compare.py
@@ -31,9 +32,9 @@ def tree(mode, bets):
     return Settings(sizes=tuple((b,) for b in bets), raise_multiplier=1e6, max_raises=0, include_all_in=False), '', 0.
 
 
-def run_ours(root, ranges, settings, target, max_seconds):
+def run_ours(root, ranges, settings, target, max_seconds, engine='auto'):
     t = time.perf_counter()
-    solver = PostflopCFR(root, ranges, settings, max_bytes=12 * 2 ** 30)
+    solver = PostflopCFR(root, ranges, settings, max_bytes=12 * 2 ** 30, engine=engine)
     build = time.perf_counter() - t
     solver.solve(iterations=100000, target_exploitability=target * root.pot, check_every=10,
                  time_limit_seconds=max_seconds)
@@ -69,6 +70,7 @@ def main():
     p.add_argument('--target', type=float, default=.001, help='fraction of pot')
     p.add_argument('--max-seconds', type=float, default=300)
     p.add_argument('--seed', type=int, default=7)
+    p.add_argument('--engine', choices=('auto', 'numba', 'numpy'), default='auto', help='engine for our solver')
     p.add_argument('--output', type=Path, default=Path('benchmarks/results/postflop-full-compare.json'))
     args = p.parse_args()
     cases = [('turn', 'As Kd 7c 2h', 1, n, args.mode, (.5, .5, 1.)) for n in args.turn_hands]
@@ -83,7 +85,7 @@ def main():
         rng = random.Random(args.seed)
         ranges = [{h: round(rng.uniform(.05, 1.), 3) for h in rng.sample(pool, n)} for _ in (0, 1)]
         row = dict(spot=f'{street}/{mode}', hands=n)
-        for label, fn in (('ours', lambda: run_ours(root, ranges, settings, args.target, args.max_seconds)),
+        for label, fn in (('ours', lambda: run_ours(root, ranges, settings, args.target, args.max_seconds, args.engine)),
                           ('postflop', lambda: run_theirs(root, ranges, bets, raises, allin, args.target, args.max_seconds))):
             r = fn()
             cells = ' '.join(f"{'   -    ' if t is None else f'{t:7.2f}s'}" for t in time_to(r['history'], root.pot))
