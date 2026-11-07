@@ -103,12 +103,39 @@ class SpotGenerator:
         return None, 'fold' if state.terminal == 'fold' else 'all_in'
 
 
-def solve_spot(spot, lp_seconds, tolerance, max_entries):
+def solve_spot_cfr(spot, seconds, target_pot_fraction, max_iterations):
+    """Same record as ``solve_spot`` but labeled by vectorized CFR+ (approximate equilibrium).
+
+    ``certificate`` holds the best-response exploitability of the average strategy.
+    """
+    import numpy as np
+    from .cfr_plus_river import CFRPlusRiver
+    start = time.monotonic()
+    root = spot['state']
+    result = CFRPlusRiver(root, spot['ranges'], Settings())
+    result.solve(iterations=max_iterations, target_exploitability=target_pot_fraction * root.pot,
+                 check_every=25, time_limit_seconds=seconds)
+    evs = [{combo_text(h): None if np.isnan(v) else float(v) for h, v in zip(result.hands[p], values)}
+           for p, values in enumerate(result.hand_values())]
+    certificate = dict(result.stats, solver='cfr+', exploitability_pot=result.stats['exploitability_bb'] / root.pot)
+    return dict(board=[card_text(c) for c in root.board], pot_bb=root.pot,
+                stacks_bb=root.stacks, actor=root.actor, history=spot['history'],
+                root_state=asdict(root), ranges=[{combo_text(h): w for h, w in r.items()} for r in spot['ranges']],
+                bots=spot['bots'], sampled_hands=spot['sampled_hands'], hand_ev_bb=evs,
+                hand_ev_pot=[{h: v / root.pot if v is not None else None for h, v in ev.items()} for ev in evs],
+                root_actions=[a.as_dict() for a in root.actions(Settings())],
+                root_strategy={entry['hand']: entry['probabilities'] for entry in result.root_policy()},
+                certificate=certificate, label_seconds=time.monotonic() - start)
+
+
+def solve_spot(spot, lp_seconds, tolerance, max_entries, cfr=None):
     """Per-hand conditional on-policy EVs under the certified river equilibrium.
 
     Positive range hands with no compatible opponent get null labels, not zero
     EV. Unrepresented/zero-weight hands have no labels in this dataset version.
     """
+    if cfr is not None:
+        return solve_spot_cfr(spot, lp_seconds, *cfr)
     import numpy as np
     from .exact_river import ExactRiver
     start = time.monotonic()
@@ -331,14 +358,16 @@ def next_formation(counts, rng=None):
     return rng.choices(eligible, weights=[remaining[k] for k in eligible])[0]
 
 
-def dataset_config(seed, chunk_size, lp_seconds, wall_seconds, tolerance, max_entries):
+def dataset_config(seed, chunk_size, lp_seconds, wall_seconds, tolerance, max_entries, cfr=None):
     root = Path(__file__).parent
     sources = ('river_dataset.py', 'naive_bots.py', 'cards.py', 'preflop.py',
-               'game.py', 'sizing.py', 'screenshot_charts.py', 'range_game.py', 'exact_river.py')
+               'game.py', 'sizing.py', 'screenshot_charts.py', 'range_game.py', 'exact_river.py',
+               'cfr_plus_river.py')
     return dict(version=VERSION, seed=seed, chunk_size=chunk_size,
                 formations={k: dict(line=v[0], weight=v[1]) for k, v in FORMATIONS.items()},
                 bots=BOT_VERSION, sizing=MODEL_VERSION, lp_seconds=lp_seconds,
                 wall_seconds=wall_seconds, tolerance=tolerance, max_payoff_entries=max_entries,
+                solver='lp' if cfr is None else dict(name='cfr+', target_pot_exploitability=cfr[0], max_iterations=cfr[1]),
                 source_hashes={name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in sources},
                 chart_sha256=hashlib.sha256(encoded(screenshot_chart()).encode()).hexdigest(),
                 labels='Conditional on-policy equilibrium EV, BB and pot-normalized; null means no compatible opponent. '
@@ -371,13 +400,19 @@ def main(argv=None):
     parser.add_argument('--spot-seconds', type=positive_number, default=180, help='Hard wall timeout including LP setup and labels.')
     parser.add_argument('--tolerance', type=positive_number, default=1e-7)
     parser.add_argument('--max-payoff-entries', type=positive_int, default=25_000_000)
+    parser.add_argument('--solver', choices=('lp', 'cfr+'), default='lp',
+                        help='Label with the exact LP (default) or vectorized CFR+.')
+    parser.add_argument('--target-exploitability', type=positive_number, default=0.001,
+                        help='cfr+ only: stop at this exploitability as a fraction of the pot (default 0.001).')
+    parser.add_argument('--max-iterations', type=positive_int, default=2000, help='cfr+ only: iteration cap.')
     args = parser.parse_args(argv)
+    cfr = (args.target_exploitability, args.max_iterations) if args.solver == 'cfr+' else None
     stop = threading.Event()
     def stop_handler(*_):
         stop.set()
     previous = {sig: signal.signal(sig, stop_handler) for sig in (signal.SIGINT, signal.SIGTERM)}
     config = dataset_config(args.seed, args.chunk_size, args.lp_seconds, args.spot_seconds,
-                            args.tolerance, args.max_payoff_entries)
+                            args.tolerance, args.max_payoff_entries, cfr)
     deadline = time.monotonic() + args.hours * 3600
     started, report_at = time.monotonic(), 0.
     outcomes = Counter()
@@ -396,7 +431,7 @@ def main(argv=None):
                     store.next_attempt += 1
                 else:
                     try:
-                        sample = worker.solve((spot, args.lp_seconds, args.tolerance, args.max_payoff_entries),
+                        sample = worker.solve((spot, args.lp_seconds, args.tolerance, args.max_payoff_entries, cfr),
                                               args.spot_seconds, stop, deadline)
                     except InterruptedError:
                         break

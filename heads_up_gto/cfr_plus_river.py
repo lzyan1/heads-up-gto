@@ -157,6 +157,19 @@ class CFRPlusRiver:
                           solve_seconds=time.perf_counter() - start)
         return self
 
+    def hand_values(self):
+        """Per-hand on-policy EV (BB) under the average strategy, one array per player.
+
+        Each hand's value is conditional on its own cards: opponent hands that
+        share a card are excluded. NaN marks a hand with no compatible opponent.
+        """
+        out = []
+        for p in (0, 1):
+            cfv = self._policy_value(self.tree, p, self.weights[p], self.weights[1 - p])
+            mass = (self.stack[p] @ self.weights[1 - p]).reshape(4, -1)[3]
+            out.append(np.divide(cfv, mass, out=np.full_like(cfv, np.nan), where=mass > 0))
+        return out
+
     # -- same read-only API as ExactRiver -----------------------------------
     def policy(self, state, hand):
         node = self._locate(state.path)
