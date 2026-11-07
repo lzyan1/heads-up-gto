@@ -89,7 +89,7 @@ class _Showdown:
 
 class PostflopCFR:
     def __init__(self, root, ranges, settings, algorithm='dcfr', dtype=None, max_bytes=8 * 2 ** 30,
-                 engine='auto', threads=None):
+                 engine='auto', threads=None, lazy=False):
         if algorithm not in ('dcfr', 'cfr+'):
             raise ValueError("algorithm must be 'dcfr' or 'cfr+'.")
         if engine not in ('auto', 'numba', 'numpy'):
@@ -153,18 +153,33 @@ class PostflopCFR:
             raise ValueError(
                 f'This solve needs about {self.memory_bytes / 2 ** 30:.1f} GiB (limit {max_bytes / 2 ** 30:.1f} GiB). '
                 'Narrow the ranges, use dtype=np.float32, shrink the betting tree, or start from a later street.')
-        if engine == 'numpy':
-            self.regret = [np.zeros((len(d.actions), d.contexts, n), self.dtype) for d in self.decisions]
-            self.strategy_sum = [np.zeros_like(r) for r in self.regret]
-        built = self._prepare_showdowns()
-        if engine == 'numba':
-            self._init_numba(built, threads)
         self.iterations = 0
+        self.allocated = False
+        self._threads = threads
+        self._last_check = None  # (iteration, exploitability BB, value BB, best-response values)
         contexts = max([d.contexts for d in self.decisions] + [1])
         self.stats = {'private_hands': n, 'public_decisions': len(self.decisions),
                       'chance_nodes': self._chance_count, 'showdown_leaves': len(self._showdowns),
                       'max_contexts': contexts, 'memory_bytes': self.memory_bytes, 'engine': engine,
                       'build_seconds': time.perf_counter() - start}
+        if not lazy:
+            self.allocate()
+
+    def allocate(self):
+        """Allocate regrets and showdown tables. Called on first use when built with ``lazy=True``,
+        so a too-large solve is rejected (and a preview made) without touching memory."""
+        if self.allocated:
+            return self
+        start = time.perf_counter()
+        if self.engine == 'numpy':
+            self.regret = [np.zeros((len(d.actions), d.contexts, self.size), self.dtype) for d in self.decisions]
+            self.strategy_sum = [np.zeros_like(r) for r in self.regret]
+        built = self._prepare_showdowns()
+        if self.engine == 'numba':
+            self._init_numba(built, self._threads)
+        self.allocated = True
+        self.stats['allocate_seconds'] = time.perf_counter() - start
+        return self
 
     # ------------------------------------------------------------------ tree
     def _deal(self, boards, draw):
@@ -518,6 +533,7 @@ class PostflopCFR:
 
         Evaluated on the average strategy.
         """
+        self.allocate()
         if self.engine == 'numba':
             best = [float(self.weights[p] @ self._run(p, 1, self.weights[1 - p]).astype(np.float64)) / self.normalizer
                     for p in (0, 1)]
@@ -529,14 +545,24 @@ class PostflopCFR:
         value = float(self.weights[0] @ self._policy_value(self.tree, 0, reach[1])[0]) / self.normalizer
         return max(0., (best[0] + best[1]) / 2), value, best
 
-    def solve(self, *, iterations=1000, target_exploitability=None, check_every=25, time_limit_seconds=None):
-        """Run until ``iterations`` more, the exploitability target (BB) or the time limit.
+    def solve(self, *, iterations=1000, target_exploitability=None, check_every=25, time_limit_seconds=None,
+              stop=None, progress=None, check_overhead=None, final_check=True):
+        """Run until ``iterations`` more, the exploitability target (BB), the time limit or ``stop()``.
 
-        ``stats['history']`` holds (iteration, solve seconds, exploitability BB); the clock
-        excludes exploitability checks.
+        ``stats['history']`` holds (iteration, solve seconds, exploitability BB); the clock excludes
+        exploitability checks. Exploitability is checked every ``check_every`` iterations, or, with
+        ``check_overhead`` (a fraction such as 0.15), whenever enough solve time has passed that
+        checking costs at most that share of the run: right for iterations that take seconds.
+        ``stop`` is polled before every iteration and ``progress(iteration, seconds,
+        exploitability or None)`` is called after every one. ``final_check=False`` skips the
+        closing exploitability computation (the last periodic check is kept in ``last_check``).
         """
-        history, spent = [], 0.
+        self.allocate()
+        history, spent, steps = [], 0., 0
+        last_at, cost = 0., None
         for step in range(iterations):
+            if stop is not None and stop():
+                break
             began = time.perf_counter()
             discounts = self._discounts(self.iterations)
             self.iterations += 1
@@ -546,16 +572,42 @@ class PostflopCFR:
                 else:
                     self._walk(self.tree, p, self._root_reach[1 - p], discounts)
             spent += time.perf_counter() - began
+            steps += 1
             done = time_limit_seconds is not None and spent > time_limit_seconds
-            if self.iterations % check_every == 0 or done or step + 1 == iterations:
-                exploit = self.exploitability()[0]
+            if check_overhead is None:
+                due = self.iterations % check_every == 0
+            else:
+                due = steps >= 2 if cost is None else spent - last_at >= cost / check_overhead
+            exploit = None
+            if due or done or step + 1 == iterations:
+                measured = time.perf_counter()
+                full = self.exploitability()
+                cost, last_at, exploit = time.perf_counter() - measured, spent, full[0]
                 history.append((self.iterations, spent, exploit))
+                self._last_check = (self.iterations, *full)
                 if done or target_exploitability is not None and exploit <= target_exploitability:
                     break
-        exploit, value, best = self.exploitability()
-        self.stats.update(iterations=self.iterations, exploitability_bb=exploit, value_bb=value,
-                          best_response_values_bb=best, history=history, solve_seconds=spent)
+            if progress is not None:
+                progress(self.iterations, spent, exploit)
+        self.stats.update(iterations=self.iterations, history=history, solve_seconds=spent)
+        if final_check and (self._last_check is None or self._last_check[0] != self.iterations):
+            self.check()
+        if self._last_check is not None:
+            _, exploit, value, best = self._last_check
+            self.stats.update(exploitability_bb=exploit, value_bb=value, best_response_values_bb=best)
         return self
+
+    def check(self):
+        """Compute and record exploitability now: (exploitability, value, best-response values) in BB."""
+        full = self.exploitability()
+        self._last_check = (self.iterations, *full)
+        self.stats.update(exploitability_bb=full[0], value_bb=full[1], best_response_values_bb=full[2])
+        return full
+
+    @property
+    def last_check(self):
+        """(iteration, exploitability BB, value BB, best-response values) of the latest check, or None."""
+        return self._last_check
 
     def hand_values(self):
         """Root per-hand on-policy EV (BB) for each player, as two length-N arrays.
@@ -564,6 +616,7 @@ class PostflopCFR:
         no compatible opponent exists. Hands outside a player's range get the value of
         playing the average strategy from that hand.
         """
+        self.allocate()
         out = []
         for p in (0, 1):
             reach = self.weights[1 - p][None, :]
@@ -607,6 +660,7 @@ class PostflopCFR:
         node, k = self.locate(path)
         if node.kind != 'decision':
             raise ValueError('Not a decision node; add the dealt card or action to the path.')
+        self.allocate()
         return node.actions, self._average_at(node, k)
 
     def _average_at(self, node, k):

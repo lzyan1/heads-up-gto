@@ -18,6 +18,7 @@ from .sizing import profile_for, sizing_metadata
 from .preflop import chart_ranges, reconstruct
 from .deep_cfr import DeepCFRSolver
 from .river_only import RiverOnlySolver
+from .full_tree import FullTreeSolver, memory_limit
 from .screenshot_charts import screenshot_chart
 from .navigation import preflop_view
 from .reference_line import supports_reference, comparison_report
@@ -39,8 +40,29 @@ def app_settings(data):
     return replace(settings, sizes=((), (), ()), max_raises=2, include_all_in=False)
 
 
-def create_solver(root, ranges, settings):
+SOLVERS = ("full_tree", "legacy")
+
+
+def solver_kind(payload):
+    kind = payload.get("solver", "full_tree")
+    if kind not in SOLVERS:
+        raise ValueError("Solver must be 'full_tree' or 'legacy'.")
+    return kind
+
+
+def create_solver(root, ranges, settings, kind="full_tree", preview=False):
+    """``full_tree``: one full-width DCFR solve of the whole remaining game (any street).
+    ``legacy``: deterministic neural flop/turn policies over direct river LPs."""
+    if kind == "full_tree":
+        return FullTreeSolver(root, ranges, settings, enforce_memory=not preview)
     return RiverOnlySolver(root, ranges, settings) if root.street == 2 else DeepCFRSolver(root, ranges, settings)
+
+
+def make_room(incoming):
+    """Drop the oldest finished solves until the new one's memory fits beside the rest."""
+    needed = getattr(incoming, "memory_bytes", 0)
+    while JOBS and sum(getattr(j["solver"], "memory_bytes", 0) for j in JOBS.values()) + needed > memory_limit():
+        del JOBS[next(iter(JOBS))]
 
 
 def round_count(value):
@@ -67,20 +89,21 @@ def running_stats(solver, budget):
             "run_seconds": 0, "time_limit_seconds": budget.get("time_limit_seconds")}
 
 
-def prepare(payload):
+def prepare(payload, preview=False):
     require_builtin_ranges(payload)
     board = parse_cards(payload.get("flop", ""), 3)
     preflop = reconstruct(payload.get("preflop", ""))
     settings = app_settings(payload.get("settings", {}))
     budget = training_budget(payload)
+    kind = solver_kind(payload)
     chart = screenshot_chart()
     ranges = chart_ranges(chart, preflop, board)
     name, is_demo = chart["name"], False
     approximation = {"frequency_step": chart["frequency_step"], "source": chart["provenance"]["source"], "jam_restriction": chart["provenance"]["jam_restriction"]}
     profile = profile_for(preflop.pot, preflop.stacks)
     root = State(preflop.pot, preflop.stacks, board, sizing_profile=profile)
-    solver = create_solver(root, ranges, settings)
-    return solver, budget, {"name": name, "is_demo": is_demo, "backend": "hybrid_pure", "range_source": "wizard", "sizing_status": dict.fromkeys(("flop", "turn", "river"), "scenario_fixed"), "sizing": sizing_metadata(profile), "preflop": preflop.history, "combos": [len(r) for r in ranges], "weighted_combos": [round(sum(r.values()), 2) for r in ranges], "pot": root.pot, "stacks": root.stacks, "settings": asdict(settings), "training_budget": budget, "range_approximation": approximation, "reference_line_available": supports_reference(root)}
+    solver = create_solver(root, ranges, settings, kind, preview)
+    return solver, budget, {"name": name, "is_demo": is_demo, "solver": kind, "backend": "full_tree" if kind == "full_tree" else "hybrid_pure", "range_source": "wizard", "sizing_status": dict.fromkeys(("flop", "turn", "river"), "scenario_fixed"), "sizing": sizing_metadata(profile), "preflop": preflop.history, "combos": [len(r) for r in ranges], "weighted_combos": [round(sum(r.values()), 2) for r in ranges], "pot": root.pot, "stacks": root.stacks, "settings": asdict(settings), "training_budget": budget, "range_approximation": approximation, "reference_line_available": supports_reference(root)}
 
 
 def run_job(job, budget):
@@ -166,12 +189,13 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/settings/validate":
                 app_settings(payload.get("settings", {}))
                 training_budget(payload)
+                solver_kind(payload)
                 return self.send_json({"ok": True})
             if path == "/api/preflop":
                 require_builtin_ranges(payload)
                 return self.send_json(preflop_view(payload.get("history", []), screenshot_chart()))
             if path == "/api/preview":
-                _, _, metadata = prepare(payload)
+                _, _, metadata = prepare(payload, preview=True)
                 return self.send_json(metadata)
             if path == "/api/solve":
                 with LOCK:
@@ -180,6 +204,7 @@ class Handler(BaseHTTPRequestHandler):
                     solver, budget, metadata = prepare(payload)
                     if len(JOBS) >= 2:
                         del JOBS[next(iter(JOBS))]
+                    make_room(solver)
                     job = {"id": uuid.uuid4().hex, "solver": solver, "metadata": metadata, "request": payload, "stats": running_stats(solver, budget), "busy": True}
                     JOBS[job["id"]] = job
                     threading.Thread(target=run_job, args=(job, budget), daemon=True).start()
@@ -218,12 +243,14 @@ class Handler(BaseHTTPRequestHandler):
                         if state.terminal or state.pending:
                             raise ValueError("Refine an active decision after dealing the next board card.")
                         settings = app_settings(payload.get("settings", asdict(job["solver"].settings)))
-                        solver = create_solver(replace(state, path=()), ranges, settings)
-                        metadata = {**job["metadata"], "pot": state.pot, "stacks": state.stacks, "combos": [len(r) for r in ranges], "local_refinement": True, "parent_path": node_path, "fallback_used": fallback, "settings": asdict(settings), "training_budget": budget, "backend": solver.stats()["backend"], "reference_line_available": supports_reference(solver.root)}
+                        kind = solver_kind({"solver": payload.get("solver", job["metadata"].get("solver", "legacy"))})
+                        solver = create_solver(replace(state, path=()), ranges, settings, kind)
+                        metadata = {**job["metadata"], "solver": kind, "pot": state.pot, "stacks": state.stacks, "combos": [len(r) for r in ranges], "local_refinement": True, "parent_path": node_path, "fallback_used": fallback, "settings": asdict(settings), "training_budget": budget, "backend": solver.stats()["backend"], "reference_line_available": supports_reference(solver.root)}
                         request = {"original": job["request"], "refine_path": node_path}
                         new_job = {"id": uuid.uuid4().hex, "solver": solver, "metadata": metadata, "request": request, "stats": running_stats(solver, budget), "busy": True}
                         if len(JOBS) >= 2:
                             del JOBS[next(iter(JOBS))]
+                        make_room(solver)
                         JOBS[new_job["id"]] = new_job
                         threading.Thread(target=run_job, args=(new_job, budget), daemon=True).start()
                     return self.send_json(job_public(new_job), 202)
@@ -246,7 +273,8 @@ class Handler(BaseHTTPRequestHandler):
                     selected = parse_cards(payload["hand"], 2) if payload.get("hand", "").strip() else None
                     node = job["solver"].inspect(node_path, selected)
                     if command == "export":
-                        return self.send_json({"version": 1, "notice": "Deterministic preflop/flop/turn with direct mixed river solving. River certificates apply only to the supplied boundary ranges and action tree, not the full game.", "request": job["request"], "metadata": job["metadata"], "stats": job["stats"], "root_state": asdict(job["solver"].root), "root_ranges": [{combo_text(h): w for h, w in r.items()} for r in job["solver"].ranges], "node": node})
+                        notice = ("Approximate equilibrium (discounted CFR) of the whole remaining game under the fixed action tree; exploitability is measured against that tree, from the supplied ranges." if job["metadata"].get("solver") == "full_tree" else "Deterministic preflop/flop/turn with direct mixed river solving. River certificates apply only to the supplied boundary ranges and action tree, not the full game.")
+                        return self.send_json({"version": 1, "notice": notice, "request": job["request"], "metadata": job["metadata"], "stats": job["stats"], "root_state": asdict(job["solver"].root), "root_ranges": [{combo_text(h): w for h, w in r.items()} for r in job["solver"].ranges], "node": node})
                     return self.send_json(node)
             return self.send_json({"error": "Not found"}, 404)
         except (ValueError, TypeError, KeyError, OverflowError) as exc:

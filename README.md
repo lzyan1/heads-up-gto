@@ -202,6 +202,17 @@ Memory is the practical limit, because regrets and strategies are stored for eve
 narrow ranges or a small betting tree. `benchmarks/postflop_full_compare.py` checks values and
 latency against postflop-solver (build `benchmarks/postflop_cli` with cargo first).
 
+### In the web app
+
+Settings → **Solver** chooses the backend per solve (default **Full tree**; the old Deep CFR +
+river-LP flow is still available as **Legacy**, and `/api/solve` takes `"solver": "full_tree" | "legacy"`).
+With Full tree every street can mix, the status line shows exploitability as a percentage of the pot,
+Stop pauses after the current iteration and Train more continues from where it stopped. Typical
+cost on the built-in charts: river and turn solves reach 0.05% of the pot in seconds; a 3-bet flop
+takes minutes; a single-raised flop needs about 9 GiB and roughly 5-8 s per iteration, so give it a
+long time limit. A solve whose memory estimate exceeds 60% of physical RAM is rejected up front, and
+older solves are dropped from memory to make room for a new one.
+
 ## Solver implementation
 
 - `deep_cfr.py`: deterministic greedy flop/turn policies, sampled advantage

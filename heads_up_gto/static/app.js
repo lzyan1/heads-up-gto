@@ -31,7 +31,7 @@ function readConfig(){
   return {...trainingLimit($('stop-mode').value,Number($('iterations').value),Number($('time-limit').value)),settings:{
     ...Object.fromEntries(deepFields.map(([id,key])=>[key,id==='deep-device'?$(id).value:Number($(id).value)])),
     seed:Number($('seed').value),river_seconds:Number($('river-seconds').value)
-  }};
+  },solver:$('solver').value};
 }
 function updateSettingsFields(){
   const timed=$('stop-mode').value==='time';
@@ -42,6 +42,7 @@ function restoreSettings(){
   const timed=config.time_limit_seconds!==undefined;
   $('stop-mode').value=timed?'time':'iterations';
   $(timed?'time-limit':'iterations').value=timed?config.time_limit_seconds:config.iterations;
+  $('solver').value=config.solver||'full_tree';
   $('seed').value=config.settings.seed;
   $('river-seconds').value=config.settings.river_seconds;
   for(const [id,key] of deepFields)if(config.settings[key]!==undefined)$(id).value=config.settings[key];
@@ -110,13 +111,14 @@ function controls(){
   $('export').hidden=!hasSolve||busy||!node;$('export').disabled=loading;
   $('compare').hidden=!hasSolve||busy||!ctx?.job.metadata.reference_line_available;$('compare').disabled=loading;
   if(busy){const s=ctx.job.stats,timed=s.time_limit_seconds!=null;
-    const unit=s.backend==='exact_river'?'river solves':'training rounds';
-    const phaseLabel={river_lp:'Solving river directly',sampling_0:'Sampling BB',sampling_1:'Sampling SB',advantage_0:'Fitting BB advantages',advantage_1:'Fitting SB advantages',average_0:'Fitting BB average',average_1:'Fitting SB average'}[s.phase];
-    $('study-status').textContent=(timed?`Solving · ${fmt(s.run_seconds||0)} / ${fmt(s.time_limit_seconds)}s · ${fmt(s.iterations||0)} ${unit}`:`Solving · ${fmt(s.iterations||0)} / ${fmt(s.target||0)} ${unit}`)+(phaseLabel?` · ${phaseLabel} ${s.phase_step}/${s.phase_total}`:'');
+    const full=s.backend==='full_tree';
+    const unit=s.backend==='exact_river'?'river solves':full?'iterations':'training rounds';
+    const phaseLabel=full?{preparing:'Preparing the solve',checking:'Measuring exploitability'}[s.phase]:{river_lp:'Solving river directly',sampling_0:'Sampling BB',sampling_1:'Sampling SB',advantage_0:'Fitting BB advantages',advantage_1:'Fitting SB advantages',average_0:'Fitting BB average',average_1:'Fitting SB average'}[s.phase];
+    $('study-status').textContent=(timed?`Solving · ${fmt(s.run_seconds||0)} / ${fmt(s.time_limit_seconds)}s · ${fmt(s.iterations||0)} ${unit}`:`Solving · ${fmt(s.iterations||0)} / ${fmt(s.target||0)} ${unit}`)+(full&&s.exploitability_pot!=null?` · exploitability ${(100*s.exploitability_pot).toFixed(2)}% pot`:'')+(phaseLabel?` · ${phaseLabel}${full?'':` ${s.phase_step}/${s.phase_total}`}`:'');
     $('progress').style.width=`${Math.min(100,100*(timed?(s.run_seconds||0)/s.time_limit_seconds:(s.iterations||0)/(s.target||1)))}%`;
   }else{$('progress').style.width='0';const s=ctx?.job.stats;
     const suffix=s?.status==='cancelled'?' · stopped':s?.status==='error'?' · training failed':s?.status==='complete'&&s.time_limit_seconds!=null?' · time limit reached':'';
-    $('study-status').textContent=loading?'Loading decision…':hasSolve?`${fmt(s.iterations||0)} ${s.backend==='exact_river'?'river solves':'training rounds'} · ${fmt(s.seconds||0)}s${suffix}${s.pending_round?' · round paused; Train more to continue':''}`:'GTO Wizard · hardcoded preflop';
+    $('study-status').textContent=loading?'Loading decision…':hasSolve?`${fmt(s.iterations||0)} ${s.backend==='exact_river'?'river solves':s.backend==='full_tree'?'iterations':'training rounds'} · ${fmt(s.seconds||0)}s${s.backend==='full_tree'&&s.exploitability_pot!=null?` · exploitability ${(100*s.exploitability_pot).toFixed(3)}% pot`:''}${suffix}${s.pending_round?' · round paused; Train more to continue':''}`:'GTO Wizard · hardcoded preflop';
   }
 }
 function addDecision(panel,jobId){
@@ -217,10 +219,10 @@ function renderActions(){
     $('action-list').append(b);
   }
   $('action-bar').style.background=actionGradient(node?.aggregate||[],display);
-  $('action-hint').textContent=node?.exact?'Direct river equilibrium':phase==='postflop'?'Deterministic policy':'Click to continue';
+  $('action-hint').textContent=node?.exact?(node.exact.method==='full_tree_dcfr'?'Full-tree strategy':'Direct river equilibrium'):phase==='postflop'?'Deterministic policy':'Click to continue';
   if(!current.length){
     const box=$('decision-message');box.hidden=false;box.replaceChildren();$('action-bar').hidden=true;
-    if(ctx?.job.busy){box.append(el('strong','','Solving the continuation…'),el('span','','Flop/turn training calls a direct river solver at the boundary. Stop pauses training and interrupts an active river solve.'));}
+    if(ctx?.job.busy){box.append(el('strong','','Solving the continuation…'),el('span','',ctx.job.stats.backend==='full_tree'?'Solving every runout of the remaining game together. Stop pauses the solve; Train more continues it.':'Flop/turn training calls a direct river solver at the boundary. Stop pauses training and interrupts an active river solve.'));}
     else if(node?.pending){const street=phase==='preflop'?'Flop':node.street==='Flop'?'Turn':'River';box.append(el('strong','',`Ready for the ${street.toLowerCase()}.`),el('span','','The betting round is complete. Choose the next board cards to continue.'),navButton(`Choose ${street.toLowerCase()}`,'primary',()=>openPicker({street,count:street==='Flop'?3:1,blocked:node.board,selected:[],prefix:node.path,context:phase==='postflop'?ctx:null})));}
     else if(node?.terminal){box.append(el('strong','',node.terminal==='fold'?`${player(node.winner)} wins the pot.`:'No more betting decisions.'),el('span','','Return to an earlier decision in the action strip to explore another line.'));}
     else if(node?.missing_chart){box.append(el('strong','','This branch needs another chart.'),el('span','','The supplied screenshots do not contain this response. Choose an earlier action from the hardcoded chart.'));}
@@ -238,7 +240,7 @@ function render(scroll=false){
   $('range-caption').textContent=view==='breakdown'?'Bar height = reach · color = action':view==='ranges'?'Bar height = range reach':'Conditional action frequencies';
   $('coverage').textContent=n?.phase==='postflop'&&n.actions.length?`${pct(n.coverage)} ${n.exact?'solved range':'direct samples'}`:n?.actions.length&&!n.manual?(n.coverage<.999?`${pct(n.coverage)} chart coverage`:'Chart strategy'):'';
   $('source-label').textContent='GTO Wizard · hardcoded preflop';
-  let note=phase==='preflop'?'Each hand commits to its highest-probability chart action. Ties prefer fold, then call, then the smaller raise. Action totals aggregate different hands.':'Flop and turn choose one action per exact hand. Rivers use direct mixed-strategy solving. One size per spot, except 33% / 100% river bets; river donks use 50%. All-in replaces a prescribed size when required. The restricted tree and earlier play have no full-game equilibrium guarantee.';
+  let note=phase==='preflop'?'Each hand commits to its highest-probability chart action. Ties prefer fold, then call, then the smaller raise. Action totals aggregate different hands.':(ctx?.job.metadata.solver==='full_tree'?'Every street is solved together by discounted CFR over all runouts, so any hand can mix on any street. One size per spot, except 33% / 100% river bets; river donks use 50%. All-in replaces a prescribed size when required. The result approximates an equilibrium of this restricted tree only.':'Flop and turn choose one action per exact hand. Rivers use direct mixed-strategy solving. One size per spot, except 33% / 100% river bets; river donks use 50%. All-in replaces a prescribed size when required. The restricted tree and earlier play have no full-game equilibrium guarantee.');
   if(phase==='postflop'&&n?.sizing)note+=` ${n.sizing.reason}`;
   if(phase==='preflop'&&n?.actions.length&&!n.manual&&n.coverage<.999)note+=' This chart omits some frequencies; averages include only hands with a complete mix.';
   if(n?.neural){
@@ -246,7 +248,11 @@ function render(scroll=false){
     if(!ctx?.job.stats.prediction_ready)note+=' No complete neural round yet; choose Train more to finish the first average strategy.';
     if(n.neural.tracking_saturated)note+=' The visit-tracking limit was reached; direct sample counts are lower bounds.';
   }
-  if(n?.exact)note+=` Direct river solve: exploitability ${fmt(n.exact.certificate.exploitability_bb)} BB for these boundary ranges. No river network predictions or regret matching.`;
+  if(n?.exact?.method==='full_tree_dcfr'){
+    const c=n.exact.certificate;
+    note+=c&&c.exploitability_bb!==undefined?` Full-tree DCFR: exploitability ${fmt(c.exploitability_bb)} BB (${(100*c.exploitability_pot).toFixed(3)}% of the pot) after ${fmt(c.iterations_at_check)} iterations${c.current?'':' (an earlier check; Train more for a fresh value)'}. An approximate equilibrium of the fixed tree, not a certificate.`:' No complete iteration yet; choose Train more.';
+    if(ctx?.job.stats.engine==='numpy')note+=' Running on the slower numpy engine; install numba (pip install -e ".[fast]") for roughly 30x speed.';
+  }else if(n?.exact)note+=` Direct river solve: exploitability ${fmt(n.exact.certificate.exploitability_bb)} BB for these boundary ranges. No river network predictions or regret matching.`;
   if(n?.unreachable)note+=' This branch has no reaching range under the current deterministic policy.';
   if(ctx?.job.stats.river_off_path_solves)note+=` ${fmt(ctx.job.stats.river_off_path_solves)} training river boundaries had zero-probability earlier actions; counterfactual beliefs retained the preceding range. These are not reached-policy ranges.`;
   if(phase==='postflop'&&(n?.fallback_used||ctx?.job.metadata.fallback_used))note+=' An untrained earlier decision used the initialized deterministic action to carry ranges forward.';

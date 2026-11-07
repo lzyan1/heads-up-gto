@@ -40,14 +40,15 @@
 <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
   <div class="dialog-heading"><div><span class="eyebrow">WORKSPACE</span><h2 id="settings-title">Study settings</h2></div><button id="settings-close" class="icon-button" aria-label="Close settings">×</button></div>
   <form id="settings-form">
-    <p class="hint">Preflop, flop and turn use one action per hand. Training on the earlier streets calls a direct river equilibrium solver using the automatically propagated ranges. River strategies may mix. This is not a full-game GTO certificate.</p>
+    <div><label for="solver">Solver</label><select id="solver"><option value="full_tree">Full tree · discounted CFR over every runout</option><option value="legacy">Legacy · deterministic neural flop/turn + river LP</option></select></div>
+    <p class="hint">Full tree solves the flop, turn and river together with no neural networks, so every street can mix; river and turn solves finish in seconds, a flop can take minutes to an hour and needs up to about 9 GiB of memory. It reports exploitability and is an approximate equilibrium of the fixed betting tree. Legacy uses one action per hand on the flop and turn and calls a direct river solver; it is not a full-game GTO certificate.</p>
     <div class="two">
       <div><label for="stop-mode">Stop after</label><select id="stop-mode"><option value="time">Time limit</option><option value="iterations">Number of neural rounds</option></select></div>
-      <div id="iteration-field" hidden><label for="iterations">Neural rounds per run</label><input id="iterations" type="number" min="1" step="1" value="10" disabled required></div>
+      <div id="iteration-field" hidden><label for="iterations">Neural rounds per run</label><input id="iterations" type="number" min="1" step="1" value="10" disabled required><small class="hint">DCFR iterations for the full-tree solver.</small></div>
       <div id="time-field"><label for="time-limit">Time limit (seconds)</label><input id="time-limit" type="number" min="0.1" step="any" value="60" required></div>
     </div>
     <p class="hint">Applies to the next solve, refinement or Train more. Training pauses between work steps; earlier-street policies publish after a full round. An interrupted river LP restarts when you continue. Each timed run gets a fresh budget.</p>
-    <details><summary>Earlier-street training · advanced settings</summary>
+    <details><summary>Legacy solver · advanced settings</summary>
       <div id="deep-settings">
         <div class="two"><div><label for="deep-device">Neural computation</label><select id="deep-device"><option value="cpu">CPU · default</option><option value="mps">Apple GPU · MPS</option></select></div><div><label for="deep-hidden">Network width</label><select id="deep-hidden"><option value="64">64</option><option value="128" selected>128</option><option value="256">256</option></select></div></div>
         <div class="two"><div><label for="deep-buffer-size">Samples per buffer</label><input id="deep-buffer-size" type="number" min="128" max="100000" step="1" value="25000" required></div><div><label for="deep-traversals">Deals per player per round</label><input id="deep-traversals" type="number" min="1" max="4096" step="1" value="128" required></div></div>

@@ -131,7 +131,7 @@ class APITests(unittest.TestCase):
 
     def start(self, **changes):
         payload = {'flop': 'As Kd 7c', 'preflop': 'raise:2.5/raise:11.5/raise:26/call',
-                   'time_limit_seconds': 1e-9, 'settings': self.settings}
+                   'time_limit_seconds': 1e-9, 'settings': self.settings, 'solver': 'legacy'}
         return self.wait(self.request('/api/solve', {**payload, **changes}))
 
     def test_default_solver_budget_and_removed_settings(self):
@@ -139,8 +139,13 @@ class APITests(unittest.TestCase):
         from heads_up_gto.deep_cfr import DeepCFRSolver
         from heads_up_gto.server import prepare
         solver, budget, metadata = prepare({'flop': 'As Kd 7c', 'preflop': 'raise:2.5/call',
-                                             'settings': self.settings})
+                                             'settings': self.settings, 'solver': 'legacy'})
         self.assertIsInstance(solver, DeepCFRSolver)
+        from heads_up_gto.full_tree import FullTreeSolver
+        default, _, default_metadata = prepare({'flop': 'As Kd 7c', 'preflop': 'raise:2.5/call', 'settings': self.settings},
+                                               preview=True)
+        self.assertIsInstance(default, FullTreeSolver)  # the full-tree solver is the default
+        self.assertEqual(default_metadata['backend'], 'full_tree')
         self.assertEqual(budget, {'time_limit_seconds': 60})
         self.assertEqual(metadata['backend'], 'hybrid_pure')
         self.assertEqual(training_budget({'iterations': 1}), {'iterations': 1})
@@ -209,7 +214,7 @@ class APITests(unittest.TestCase):
 
     def test_stop_returns_partial_round_and_resume_gets_fresh_budget(self):
         job = self.request('/api/solve', {'flop': 'As Kd 7c', 'preflop': 'raise:2.5/call',
-                                        'iterations': 100000, 'settings': self.settings})
+                                        'iterations': 100000, 'settings': self.settings, 'solver': 'legacy'})
         prefix = '/api/jobs/' + job['id']
         with self.assertRaises(HTTPError) as error:
             self.request(prefix + '/node', {})
