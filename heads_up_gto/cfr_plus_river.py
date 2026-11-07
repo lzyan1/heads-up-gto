@@ -33,10 +33,10 @@ class _Node:
 
 
 class CFRPlusRiver:
-    def __init__(self, root, ranges, settings, algorithm='dcfr'):
+    def __init__(self, root, ranges, settings, algorithm='dcfr', dtype=np.float64):
         if algorithm not in ('dcfr', 'cfr+'):
             raise ValueError("algorithm must be 'dcfr' or 'cfr+'.")
-        self.algorithm = algorithm
+        self.algorithm, self.dtype = algorithm, np.dtype(dtype)
         if root.street != 2 or len(root.board) != 5 or root.pending or root.terminal:
             raise ValueError('An active river decision with five board cards is required.')
         if len(ranges) != 2 or any(not math.isfinite(w) or w < 0 for r in ranges for w in r.values()):
@@ -91,7 +91,8 @@ class CFRPlusRiver:
             raise ValueError('The ranges have no compatible private deal.')
         self.nodes = []
         self.tree = self._build(root)
-        self.regret = [np.zeros((len(n.actions), self.sizes[n.actor])) if n.actions else None
+        self._walk_weights = [w.astype(self.dtype) for w in self.weights]
+        self.regret = [np.zeros((len(n.actions), self.sizes[n.actor]), self.dtype) if n.actions else None
                        for n in self.nodes]
         self.strategy_sum = [None if r is None else np.zeros_like(r) for r in self.regret]
         self.iterations = 0
@@ -112,16 +113,17 @@ class CFRPlusRiver:
     def _current(self, node):
         positive = np.maximum(self.regret[node.index], 0.)
         total = positive.sum(axis=0)
-        return np.where(total > 1e-12, positive / np.maximum(total, 1e-300), 1 / len(node.actions))
+        return np.where(total > 1e-12, positive / np.maximum(total, 1e-20), 1 / len(node.actions))
 
     def _average(self, node):
-        s = self.strategy_sum[node.index]
+        s = self.strategy_sum[node.index].astype(np.float64)
         total = s.sum(axis=0)
         return np.where(total > 1e-12, s / np.maximum(total, 1e-300), 1 / len(node.actions))
 
     def _showdown(self, player, opp_reach):
         """Rows win, loss, tie, legal: per own hand, opponent reach mass in each class."""
         q = self._prep[player]
+        opp_reach = opp_reach.astype(np.float64, copy=False)  # cumsums/subtractions stay f64
         prefix = np.concatenate(([0.], np.cumsum(opp_reach[q['order']])))
         held = np.concatenate(([0.], np.cumsum(opp_reach[q['flat']])))
         (s1, s2), ((a1, b1, c1), (a2, b2, c2)) = q['start'], q['end']
@@ -130,7 +132,7 @@ class CFRPlusRiver:
         win = prefix[q['lo']] - (held[a1] + held[a2] - base)
         upto = prefix[q['hi']] - (held[b1] + held[b2] - base) + same
         legal = prefix[-1] - (held[c1] + held[c2] - base) + same
-        return np.stack((win, legal - upto, upto - win, legal))
+        return np.stack((win, legal - upto, upto - win, legal)).astype(self.dtype, copy=False)
 
     def _leaf(self, state, player, opp_reach):
         out = self._showdown(player, opp_reach)
@@ -205,7 +207,7 @@ class CFRPlusRiver:
             discounts = self._discounts(self.iterations)
             self.iterations += 1
             for p in (0, 1):
-                self._walk(self.tree, p, self.weights[1 - p], discounts)
+                self._walk(self.tree, p, self._walk_weights[1 - p], discounts)
             spent += time.perf_counter() - began
             done = time_limit_seconds is not None and spent > time_limit_seconds
             if self.iterations % check_every == 0 or done or self.iterations == iterations:

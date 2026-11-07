@@ -34,6 +34,13 @@ class CFRPlusRiverTests(unittest.TestCase):
                     want[3] += reach[j]
                 np.testing.assert_allclose(got[:, i], want, atol=1e-12)
 
+    def test_float32_matches_float64(self):
+        import numpy as np
+        a = CFRPlusRiver(*kuhn_game()).solve(iterations=500)
+        b = CFRPlusRiver(*kuhn_game(), dtype=np.float32).solve(iterations=500)
+        self.assertAlmostEqual(a.stats['value_bb'], b.stats['value_bb'], places=4)
+        self.assertLess(b.stats['exploitability_bb'], 1e-3)
+
     def test_cfr_plus_variant_converges(self):
         solver = CFRPlusRiver(*kuhn_game(), algorithm='cfr+').solve(iterations=2000)
         self.assertAlmostEqual(solver.stats['value_bb'], -1 / 18, places=3)
