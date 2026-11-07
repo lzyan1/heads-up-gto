@@ -41,6 +41,36 @@ class CFRPlusRiverTests(unittest.TestCase):
         self.assertAlmostEqual(a.stats['value_bb'], b.stats['value_bb'], places=4)
         self.assertLess(b.stats['exploitability_bb'], 1e-3)
 
+    def test_batched_matches_individual_solves(self):
+        import numpy as np
+        from heads_up_gto.batched_river import BatchedRiver
+        root = State(21, (89.5, 89.5), parse_cards('As Kd 7c 2h 3d'), street=2,
+                     sizing_profile='single_raised', aggressor_history=(1, 1))
+        pool = list(remove_blocked(dict.fromkeys(COMBOS, 1.), root.board))
+        rng = random.Random(5)
+        pairs = [[{h: rng.uniform(.05, 1.) for h in rng.sample(pool, n)} for _ in (0, 1)] for n in (30, 80, 200)]
+        # Identical to rounding early on; later iterations can drift where regrets sit
+        # on the uniform-strategy threshold, so the tight check is short.
+        batch = BatchedRiver(root, pairs, Settings()).solve(iterations=40, check_every=1000)
+        values = batch.hand_values()
+        for k, pair in enumerate(pairs):
+            single = CFRPlusRiver(root, pair, Settings()).solve(iterations=40, check_every=1000)
+            self.assertAlmostEqual(batch.stats['value_bb'][k], single.stats['value_bb'], places=9)
+            self.assertAlmostEqual(batch.stats['exploitability_bb'][k], single.stats['exploitability_bb'], places=9)
+            for p, hv in enumerate(single.hand_values()):
+                for i, h in enumerate(single.hands[p]):
+                    self.assertAlmostEqual(values[p][k, batch.hands.index(tuple(sorted(h)))], hv[i], places=9)
+
+    def test_batched_converges(self):
+        from heads_up_gto.batched_river import BatchedRiver
+        root = State(21, (89.5, 89.5), parse_cards('As Kd 7c 2h 3d'), street=2,
+                     sizing_profile='single_raised', aggressor_history=(1, 1))
+        pool = list(remove_blocked(dict.fromkeys(COMBOS, 1.), root.board))
+        rng = random.Random(2)
+        pairs = [[{h: rng.uniform(.05, 1.) for h in rng.sample(pool, 60)} for _ in (0, 1)] for _ in range(4)]
+        solved = BatchedRiver(root, pairs, Settings()).solve(iterations=1500, target_exploitability=.01 * 21)
+        self.assertLess(solved.stats['exploitability_bb'].max(), .01 * 21)
+
     def test_cfr_plus_variant_converges(self):
         solver = CFRPlusRiver(*kuhn_game(), algorithm='cfr+').solve(iterations=2000)
         self.assertAlmostEqual(solver.stats['value_bb'], -1 / 18, places=3)
