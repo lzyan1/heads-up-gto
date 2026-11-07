@@ -1,7 +1,7 @@
 """Heads-up postflop betting tree. Amounts are BB, raise amounts are raise-to."""
 from dataclasses import dataclass, replace
 import math
-from .sizing import choose_size
+from .sizing import choose_sizes
 
 STREETS = ("Flop", "Turn", "River")
 PLAYERS = ("BB · out of position", "SB · button")
@@ -115,12 +115,7 @@ class State:
             out = [Action("check", "check", label="Check")]
             minimum = 1.0
         if self.sizing_profile:
-            target = choose_size(self).target
-            if target is None:
-                return tuple(out)
-            # Offer the scenario size and an immediate shove at every legal
-            # decision. The shared target filter deduplicates jam-sized choices.
-            targets = [target, self.paid[p] + cap]
+            targets = choose_sizes(self).targets
         else:
             if cap <= to_call or to_call and (self.aggressions > settings.max_raises or self.stacks[other] <= 0):
                 return tuple(out)

@@ -18,7 +18,7 @@ class ReferenceLineTests(unittest.TestCase):
         report = comparison_report(solver)
         self.assertEqual(solver.stats(), before)
         self.assertEqual(report['path'], ['check', 'bet:1.7', 'call', 'deal:2h',
-                                          'check', 'bet:6.3', 'call', 'deal:3d'])
+                                          'check', 'bet:5.5', 'call', 'deal:3d'])
         self.assertFalse(report['exact_benchmark'])
         self.assertFalse(report['reference_frequencies_available'])
         for entry in report['nodes']:
@@ -28,11 +28,11 @@ class ReferenceLineTests(unittest.TestCase):
             self.assertIsNone(entry['frequency_error'])
             self.assertIsNone(entry['reference']['probabilities'])
             self.assertEqual(model['aggregate'], [])
-        self.assertFalse(report['nodes'][0]['same_menu'])
+        self.assertTrue(report['nodes'][0]['same_menu'])
         self.assertTrue(report['nodes'][0]['same_amounts'])
         self.assertFalse(report['nodes'][-1]['same_amounts'])
         self.assertEqual(report['nodes'][-1]['model']['board'], ['As', 'Kd', '7c', '2h', '3d'])
-        self.assertEqual(report['nodes'][-1]['model']['stacks'], (89.5, 89.5))
+        self.assertEqual(report['nodes'][-1]['model']['stacks'], (90.3, 90.3))
         json.dumps(report, allow_nan=False)
 
     def test_only_matching_flop_root_can_use_reference(self):

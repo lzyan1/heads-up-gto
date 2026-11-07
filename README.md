@@ -85,11 +85,94 @@ restricted deterministic strategy space.
 
 ## Betting tree
 
-The existing `scenario-v2` sizing rules remain: one contextual bet/raise size
-plus all-in whenever legal. The size depends on pot type, position, public
-aggressor history, board texture and effective stacks. Normal re-raises become
-all-in. These are heuristic restrictions, not optimized GTO sizes. The same
+The `scenario-v3` table offers one aggressive action per spot, except for the
+two non-donk river bet sizes. Board texture does not change the menu:
+
+| Spot | Flop | Turn | River |
+| --- | --- | --- | --- |
+| Aggressor c-bet / barrel | 33% | 66% | 33% or 100% |
+| Previous street checked through: delayed c-bet / probe | n/a | 50% | 33% or 100% |
+| Non-aggressor bets after the aggressor checks | 33% | 50% | 33% or 100% |
+| Donk lead into the previous aggressor | 33% | 50% | 50% |
+| Raise facing a bet / donk | 3x | 2.5x | All-in |
+| Re-raise facing a raise | All-in, except pruned in single-raised pots | All-in | n/a |
+
+Bets are percentages of the pot **before** betting. Raises are **raise-to**
+multiples of the opponent's street-total bet, with legal minimum raises applied.
+All-in is not an extra action: it replaces a prescribed bet or raise when the
+effective stack is too short, or the remaining effective stack would be
+**less than half the pot after the opponent calls**. Equality does not trigger
+this shove rule. Normal amounts are rounded to 0.1 BB, exact short all-ins and
+minimum raises are preserved, and duplicate river targets are merged.
+
+These are fixed modeling restrictions, not optimized GTO sizes. The same
 betting engine and action menu are used by training, inspection and the LP.
+Preflop chart sizes are unchanged. Previously recorded benchmarks used the
+older tree and do not measure this sizing model.
+
+## Offline river dataset
+
+Generate supervised river-value examples independently of the app and neural
+training. Run from the project directory (on macOS, `caffeinate -i` prevents
+idle sleep while the script runs):
+
+```bash
+caffeinate -i .venv/bin/python scripts/precompute_rivers.py --hours 8 --output data/river-dataset
+```
+
+The same command resumes the same dataset. `--hours` is a fresh time budget
+for each invocation. For a small first run, add `--samples 20`: this is a target
+**total** count including previous runs, not 20 additional samples. Alternatively
+run `.venv/bin/python -m heads_up_gto.river_dataset` with the same arguments.
+No extra dependencies beyond the project's existing NumPy/SciPy are needed.
+
+Each completed block of 20 solved spots contains **9 single-raised, 9 3-bet,
+and 2 4-bet** pots (45/45/10). Formation order is randomized. Folds, pre-river
+all-ins, and failed LPs do not consume those quotas. No 5-bet pots are used:
+the chart's 5-bet is all-in and has no postflop decision.
+
+Two deliberately naive bots independently sample fixed value/bluff thresholds
+for each hand. They rank made hands, pair strength, overcards, gutshots,
+open-ended straight draws and flush/combo draws. Calling uses the value
+threshold with a simple adjustment for the price. Decisions are deterministic
+for a hand and public state; no equities, opponent hole cards or future cards
+enter their policies. After each action, the entire acting player's range is
+filtered by that same rule. Cards are sampled with the correct private-card
+blockers; complete surviving ranges are retained, never narrowed for speed.
+The bots stop before the first river action, where the existing LP takes over.
+
+Output files:
+
+- `manifest.json`: seed, formation mix, bot/sizing versions, solver limits and
+  source/chart fingerprints. A changed configuration requires a new directory.
+- `events.jsonl`: authoritative results and LP failures, flushed and synced
+  after every solve. Interrupted attempts are retried; incomplete final journal
+  lines are recovered automatically. A complete corrupt line causes an error.
+- `spots-000001.csv`, etc.: one row per spot, **2,500 spots per file** by default
+  (`--chunk-size`). A partial final file is also finalized on exit. An active
+  shard uses `.csv.part`; CSVs are rebuilt from the journal on resume.
+- `progress.json`: saved count, formation counts, next attempt and LP failures.
+
+Nested CSV cells are JSON: decode them with `json.loads`. Rows include the full
+river state/history, both exact-combo ranges, root mixed strategy, and conditional
+per-hand equilibrium EVs for **both players**, in BB and fractions of the river
+pot. Player order is BB/OOP then SB/IP. A hand with no compatible opponent has
+a `null` EV, which must be masked when training; it is not a zero-value label.
+Zero-weight hands outside the supplied ranges are not labeled. Bot thresholds
+and sampled private hands are audit metadata, **not value-network inputs**.
+
+One reusable CPU process solves spots sequentially to limit laptop memory use.
+Defaults: 120 seconds for the LP pair, a 180-second total per-spot watchdog,
+and a numerical certificate tolerance of 1e-7 BB. `--lp-seconds`,
+`--spot-seconds`, `--tolerance`, `--seed`, and `--max-payoff-entries` are
+configurable; use the same settings when resuming. Broad ranges can take
+minutes per spot. Timeouts are logged, never converted into training labels;
+check their frequency because they can bias which spots enter the dataset.
+Progress is printed every 30 seconds and after each solve. Ctrl-C or SIGTERM
+stops the active worker, preserves completed examples, and finalizes the CSV.
+Only one process may write a particular dataset directory at a time.
+
+This script generates data only. It does not fit a network or alter Deep CFR.
 
 ## Solver implementation
 

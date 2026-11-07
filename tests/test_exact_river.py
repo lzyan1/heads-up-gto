@@ -102,6 +102,12 @@ class ExactRiverTests(unittest.TestCase):
                      sizing_profile='single_raised', aggressor_history=(1, 1))
         ranges = parse_range('AhAd:.3,QhQd,JhJd:.8,6s6h'), parse_range('AcAd:.7,QsQh,TsTh:.4,5s5h')
         solver = ExactRiver(root, ranges, Settings()).solve(tolerance=1e-9)
+        self.assertEqual([a.key for a in solver.tree.actions], ['check', 'bet:10.5'])
+        after_check = solver.nodes[('check',)]
+        self.assertEqual([a.key for a in after_check.actions], ['check', 'bet:6.9', 'bet:21'])
+        for bet in ('bet:6.9', 'bet:21'):
+            self.assertEqual([a.key for a in solver.nodes[('check', bet)].actions],
+                             ['fold', 'call', 'raise:89.5'])
         diagnostic = river_exploitability(solver)
         self.assertLess(diagnostic['exploitability_bb'], 1e-9)
         self.assertAlmostEqual(diagnostic['exploitability_bb'], solver.stats['exploitability_bb'], places=10)

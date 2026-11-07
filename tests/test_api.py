@@ -89,7 +89,7 @@ class APITests(unittest.TestCase):
                 error.exception.close()
         preview = self.request('/api/preview', valid)
         self.assertEqual(preview['range_source'], 'wizard')
-        self.assertEqual(preview['sizing_status'], dict.fromkeys(('flop', 'turn', 'river'), 'scenario_heuristic'))
+        self.assertEqual(preview['sizing_status'], dict.fromkeys(('flop', 'turn', 'river'), 'scenario_fixed'))
         self.assertEqual(preview['settings']['sizes'], [[], [], []])
 
     def test_preflop_jams_start_at_sb_four_bet(self):
@@ -166,9 +166,9 @@ class APITests(unittest.TestCase):
         self.assertEqual(root['aggregate'], [])
         self.assertEqual(root['prediction_coverage'], 0)
         self.assertTrue(all(r['probabilities'] is None for r in root['rows']))
-        facing = self.request(prefix + '/node', {'path': ['bet:74']})
+        facing = self.request(prefix + '/node', {'path': ['bet:17.2', 'raise:74']})
         self.assertEqual([a['key'] for a in facing['actions']], ['fold', 'call'])
-        self.assertEqual(self.request(prefix + '/node', {'path': ['bet:74', 'call']})['terminal'], 'showdown')
+        self.assertEqual(self.request(prefix + '/node', {'path': ['bet:17.2', 'raise:74', 'call']})['terminal'], 'showdown')
         path = ['check', 'check', 'deal:2h', 'check', 'check', 'deal:3d']
         before = self.request(prefix + '/node', {'path': path})
         refined = self.wait(self.request(prefix + '/refine', {'path': path, 'iterations': 1}))
@@ -202,7 +202,7 @@ class APITests(unittest.TestCase):
         report = self.request(prefix + '/comparison', {})
         self.assertFalse(report['reference_frequencies_available'])
         self.assertEqual(len(report['nodes']), 7)
-        self.assertEqual(report['nodes'][-1]['model']['pot'], 21)
+        self.assertEqual(report['nodes'][-1]['model']['pot'], 19.4)
         self.assertEqual(report['nodes'][-1]['reference']['pot'], 41)
         self.assertEqual(report['nodes'][0]['model']['aggregate'], [])
         self.assertEqual(self.request(prefix)['stats'], job['stats'])

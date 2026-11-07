@@ -238,7 +238,7 @@ function render(scroll=false){
   $('range-caption').textContent=view==='breakdown'?'Bar height = reach · color = action':view==='ranges'?'Bar height = range reach':'Conditional action frequencies';
   $('coverage').textContent=n?.phase==='postflop'&&n.actions.length?`${pct(n.coverage)} ${n.exact?'solved range':'direct samples'}`:n?.actions.length&&!n.manual?(n.coverage<.999?`${pct(n.coverage)} chart coverage`:'Chart strategy'):'';
   $('source-label').textContent='GTO Wizard · hardcoded preflop';
-  let note=phase==='preflop'?'Each hand commits to its highest-probability chart action. Ties prefer fold, then call, then the smaller raise. Action totals aggregate different hands.':'Flop and turn choose one action per exact hand. Rivers use direct mixed-strategy solving. One scenario size plus all-in; the restricted tree and earlier play have no full-game equilibrium guarantee.';
+  let note=phase==='preflop'?'Each hand commits to its highest-probability chart action. Ties prefer fold, then call, then the smaller raise. Action totals aggregate different hands.':'Flop and turn choose one action per exact hand. Rivers use direct mixed-strategy solving. One size per spot, except 33% / 100% river bets; river donks use 50%. All-in replaces a prescribed size when required. The restricted tree and earlier play have no full-game equilibrium guarantee.';
   if(phase==='postflop'&&n?.sizing)note+=` ${n.sizing.reason}`;
   if(phase==='preflop'&&n?.actions.length&&!n.manual&&n.coverage<.999)note+=' This chart omits some frequencies; averages include only hands with a complete mix.';
   if(n?.neural){

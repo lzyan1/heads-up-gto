@@ -34,9 +34,9 @@ def require_builtin_ranges(payload):
 
 def app_settings(data):
     settings = Settings.from_dict(data)
-    # Legacy sizing inputs cannot alter the scenario size plus all-in menu. Keep the
+    # Legacy sizing inputs cannot alter the fixed public-state sizing table. Keep the
     # generic engine controls only for internal diagnostic games.
-    return replace(settings, sizes=((), (), ()), max_raises=2, include_all_in=True)
+    return replace(settings, sizes=((), (), ()), max_raises=2, include_all_in=False)
 
 
 def create_solver(root, ranges, settings):
@@ -80,7 +80,7 @@ def prepare(payload):
     profile = profile_for(preflop.pot, preflop.stacks)
     root = State(preflop.pot, preflop.stacks, board, sizing_profile=profile)
     solver = create_solver(root, ranges, settings)
-    return solver, budget, {"name": name, "is_demo": is_demo, "backend": "hybrid_pure", "range_source": "wizard", "sizing_status": dict.fromkeys(("flop", "turn", "river"), "scenario_heuristic"), "sizing": sizing_metadata(profile), "preflop": preflop.history, "combos": [len(r) for r in ranges], "weighted_combos": [round(sum(r.values()), 2) for r in ranges], "pot": root.pot, "stacks": root.stacks, "settings": asdict(settings), "training_budget": budget, "range_approximation": approximation, "reference_line_available": supports_reference(root)}
+    return solver, budget, {"name": name, "is_demo": is_demo, "backend": "hybrid_pure", "range_source": "wizard", "sizing_status": dict.fromkeys(("flop", "turn", "river"), "scenario_fixed"), "sizing": sizing_metadata(profile), "preflop": preflop.history, "combos": [len(r) for r in ranges], "weighted_combos": [round(sum(r.values()), 2) for r in ranges], "pot": root.pot, "stacks": root.stacks, "settings": asdict(settings), "training_budget": budget, "range_approximation": approximation, "reference_line_available": supports_reference(root)}
 
 
 def run_job(job, budget):

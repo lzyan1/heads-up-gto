@@ -35,8 +35,8 @@ def comparison_report(solver):
         action = None
         if selected is not None:
             kind = selected.split(":")[0]
-            # The app offers one scenario bet plus all-in. Follow that scenario
-            # bet, never snap to the screenshot amount or create a new action.
+            # Follow the smallest prescribed bet, never snap to the screenshot
+            # amount or create an action outside the current sizing table.
             choices = [a for a in state.actions(solver.settings) if a.kind == kind]
             if not choices:
                 raise ValueError(f"The current tree cannot follow the reference at {label}.")

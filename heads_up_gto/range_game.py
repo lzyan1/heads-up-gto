@@ -9,7 +9,7 @@ from dataclasses import asdict
 import random
 from .cards import DECK, card_text, combo_text, hand_class, remove_blocked
 from .game import PLAYERS, STREETS
-from .sizing import choose_size
+from .sizing import choose_sizes
 
 
 class Distribution:
@@ -144,7 +144,7 @@ class RangeGame:
         actions = state.actions(self.settings)
         response = {"board": [card_text(c) for c in state.board], "street": STREETS[state.street], "actor": state.actor, "actor_label": PLAYERS[state.actor], "pot": state.pot, "stacks": state.stacks, "pending": state.pending, "terminal": state.terminal, "winner": state.winner, "path": path, "actions": [a.as_dict() for a in actions], "rows": [], "aggregate": [], "selected": None, "fallback_used": uncertain > 0, "coverage": 0.0, "timeline": self.timeline(path), "phase": "postflop"}
         if actions and state.sizing_profile:
-            response["sizing"] = asdict(choose_size(state))
+            response["sizing"] = asdict(choose_sizes(state))
         if not actions:
             return response
         actor, other = state.actor, 1 - state.actor
