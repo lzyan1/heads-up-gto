@@ -1,6 +1,6 @@
 import unittest
 from heads_up_gto.cards import parse_cards, parse_range
-from heads_up_gto.exact_river import ExactRiver
+from heads_up_gto.river.exact_lp import ExactRiver
 from heads_up_gto.game import Settings, State
 from heads_up_gto.diagnostics import sample_summary, river_exploitability
 
@@ -23,7 +23,7 @@ class DiagnosticTests(unittest.TestCase):
     def test_inspection_diagnostics_and_selected_mass(self):
         s = self.solver()
         s.solve()
-        from heads_up_gto.river_only import RiverOnlySolver
+        from heads_up_gto.river.lp_solver import RiverOnlySolver
         adapter = RiverOnlySolver(s.root, s.ranges, s.settings)
         adapter.result = s
         hand = next(iter(s.ranges[0]))

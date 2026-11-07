@@ -123,7 +123,7 @@ caffeinate -i .venv/bin/python scripts/precompute_rivers.py --hours 8 --output d
 The same command resumes the same dataset. `--hours` is a fresh time budget
 for each invocation. For a small first run, add `--samples 20`: this is a target
 **total** count including previous runs, not 20 additional samples. Alternatively
-run `.venv/bin/python -m heads_up_gto.river_dataset` with the same arguments.
+run `.venv/bin/python -m heads_up_gto.river.dataset` with the same arguments.
 No extra dependencies beyond the project's existing NumPy/SciPy are needed.
 
 Each completed block of 20 solved spots contains **9 single-raised, 9 3-bet,
@@ -174,16 +174,29 @@ Only one process may write a particular dataset directory at a time.
 
 This script generates data only. It does not fit a network or alter Deep CFR.
 
+## Code layout
+
+```
+heads_up_gto/
+  cfr/        full-width CFR: solver.py (PostflopCFR), kernels.py (numba), full_tree.py (app adapter),
+              single_river.py / batched_river.py (river-only CFR)
+  deep_cfr/   solver.py: the legacy neural flop/turn solver
+  river/      exact_lp.py (sequence-form LP), lp_jobs.py, lp_solver.py (app adapter), dataset.py, naive_bots.py
+  cards.py game.py sizing.py range_game.py preflop.py ...   shared core, charts and navigation
+  server.py static/                                         web app
+tests/ and benchmarks/ mirror the cfr / deep_cfr / river split.
+```
+
 ## Full-width postflop DCFR (experimental, `cfr+` branch)
 
-`heads_up_gto/postflop_cfr.py` (`PostflopCFR`) solves a flop, turn or river root over the whole
+`heads_up_gto/cfr/solver.py` (`PostflopCFR`) solves a flop, turn or river root over the whole
 remaining game with no neural networks and no sampling. Every hand is an array element and every
 dealt card is a leading "context" axis, so one traversal updates all hands in all runouts.
 All-ins before the river deal every remaining card set. The algorithm is the DCFR variant used
 by b-inary/postflop-solver (`algorithm='cfr+'` is also available).
 
 ```python
-from heads_up_gto.postflop_cfr import PostflopCFR
+from heads_up_gto.cfr.solver import PostflopCFR
 solver = PostflopCFR(root_state, (oop_range, ip_range), Settings(...))   # raises if too big
 solver.solve(iterations=1000, target_exploitability=0.001 * root_state.pot)
 solver.strategy(['check', 'bet:10.5', 'call', '9s'])   # (actions, [actions, hands] probabilities)
@@ -199,8 +212,8 @@ with the numpy engine to rounding on river, turn and flop roots. It uses the per
 
 Memory is the practical limit, because regrets and strategies are stored for every river runout
 (`solver.memory_bytes`, guarded by `max_bytes`). Turn roots are comfortable; flop roots need
-narrow ranges or a small betting tree. `benchmarks/postflop_full_compare.py` checks values and
-latency against postflop-solver (build `benchmarks/postflop_cli` with cargo first).
+narrow ranges or a small betting tree. `benchmarks/cfr/postflop_full_compare.py` checks values and
+latency against postflop-solver (build `benchmarks/cfr/postflop_cli` with cargo first).
 
 ### In the web app
 
@@ -215,16 +228,16 @@ older solves are dropped from memory to make room for a new one.
 
 ## Solver implementation
 
-- `deep_cfr.py`: deterministic greedy flop/turn policies, sampled advantage
+- `deep_cfr/solver.py`: deterministic greedy flop/turn policies, sampled advantage
   targets, bounded replay and neural fits. River requests yield to a reusable
   cancellable CPU worker instead of recursing through a river neural policy.
-- `exact_river.py`: sequence-form linear programming with both players' private
+- `river/exact_lp.py`: sequence-form linear programming with both players' private
   information preserved. Two HiGHS LPs find the strategies; recursive best
   responses independently check their deviation gains. “Exact” means the full
   specified river game solved to numerical tolerance, not symbolic arithmetic.
-- `river_jobs.py`: a process reused across training boundaries, terminated on
+- `river/lp_jobs.py`: a process reused across training boundaries, terminated on
   pause/cancel. Completed compact solutions have a bounded cache.
-- `river_only.py`: direct river study/refinement without neural training.
+- `river/lp_solver.py`: direct river study/refinement without neural training.
 - `range_game.py`: blocker-correct dealing, range conditioning and navigation.
 - `game.py` / `sizing.py`: betting legality, payoffs and fixed action abstraction.
 - `server.py` / `static/`: loopback API and browser study interface.
@@ -241,10 +254,10 @@ over unchanged.
 ## Validation and latency
 
 ```sh
-.venv/bin/python -m unittest discover -s tests -q
+.venv/bin/python -m unittest discover -s tests -t . -q
 node --test tests/test_ui.mjs
-PYTHONPATH=. .venv/bin/python benchmarks/exact_river.py --include-full --output exact-river-results.json
-PYTHONPATH=. .venv/bin/python benchmarks/exact_river.py --worker single_raised_dry 200 7 --lp-seconds 60
+PYTHONPATH=. .venv/bin/python benchmarks/river/exact_lp.py --include-full --output exact-river-results.json
+PYTHONPATH=. .venv/bin/python benchmarks/river/exact_lp.py --worker single_raised_dry 200 7 --lp-seconds 60
 ```
 
 The exact tests embed standard Kuhn poker in Hold’em: board `2c 5d 7h 9s Jc`,

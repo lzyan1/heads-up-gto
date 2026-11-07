@@ -136,12 +136,12 @@ class APITests(unittest.TestCase):
 
     def test_default_solver_budget_and_removed_settings(self):
         from heads_up_gto.server import training_budget
-        from heads_up_gto.deep_cfr import DeepCFRSolver
+        from heads_up_gto.deep_cfr.solver import DeepCFRSolver
         from heads_up_gto.server import prepare
         solver, budget, metadata = prepare({'flop': 'As Kd 7c', 'preflop': 'raise:2.5/call',
                                              'settings': self.settings, 'solver': 'legacy'})
         self.assertIsInstance(solver, DeepCFRSolver)
-        from heads_up_gto.full_tree import FullTreeSolver
+        from heads_up_gto.cfr.full_tree import FullTreeSolver
         default, _, default_metadata = prepare({'flop': 'As Kd 7c', 'preflop': 'raise:2.5/call', 'settings': self.settings},
                                                preview=True)
         self.assertIsInstance(default, FullTreeSolver)  # the full-tree solver is the default

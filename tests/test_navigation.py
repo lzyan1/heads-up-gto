@@ -5,7 +5,7 @@ from heads_up_gto.game import Settings, State
 from heads_up_gto.navigation import preflop_view
 from heads_up_gto.preflop import demo_chart, reconstruct
 from heads_up_gto.screenshot_charts import screenshot_chart
-from heads_up_gto.deep_cfr import DeepCFRSolver
+from heads_up_gto.deep_cfr.solver import DeepCFRSolver
 
 
 class PreflopNavigationTests(unittest.TestCase):

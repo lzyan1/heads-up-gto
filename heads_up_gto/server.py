@@ -16,9 +16,9 @@ from .cards import parse_cards, combo_text
 from .game import Settings, State
 from .sizing import profile_for, sizing_metadata
 from .preflop import chart_ranges, reconstruct
-from .deep_cfr import DeepCFRSolver
-from .river_only import RiverOnlySolver
-from .full_tree import FullTreeSolver, memory_limit
+from .deep_cfr.solver import DeepCFRSolver
+from .river.lp_solver import RiverOnlySolver
+from .cfr.full_tree import FullTreeSolver, memory_limit
 from .screenshot_charts import screenshot_chart
 from .navigation import preflop_view
 from .reference_line import supports_reference, comparison_report
