@@ -8,3 +8,5 @@ __pycache__/
 build/
 dist/
 data/river-dataset/
+benchmarks/postflop_cli/target/
+benchmarks/postflop_cli/Cargo.lock

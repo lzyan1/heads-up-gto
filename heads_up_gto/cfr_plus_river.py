@@ -140,15 +140,17 @@ class CFRPlusRiver:
     def solve(self, *, iterations=1000, target_exploitability=None, check_every=50, time_limit_seconds=None):
         """Run CFR+ until ``iterations``, the exploitability target (BB) or the time limit."""
         start = time.perf_counter()
-        history = []
+        history, spent = [], 0.  # ``spent`` excludes exploitability checks
         for _ in range(iterations):
+            began = time.perf_counter()
             self.iterations += 1
             for p in (0, 1):
                 self._walk(self.tree, p, self.weights[p], self.weights[1 - p], self.iterations)
-            done = time_limit_seconds is not None and time.perf_counter() - start > time_limit_seconds
+            spent += time.perf_counter() - began
+            done = time_limit_seconds is not None and spent > time_limit_seconds
             if self.iterations % check_every == 0 or done or self.iterations == iterations:
                 exploit, ev, _ = self.exploitability()
-                history.append((self.iterations, exploit))
+                history.append((self.iterations, spent, exploit))
                 if done or target_exploitability is not None and exploit <= target_exploitability:
                     break
         exploit, ev, best = self.exploitability()

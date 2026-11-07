@@ -24,7 +24,7 @@ def main():
             ranges = [{h: rng.uniform(.05, 1.) for h in rng.sample(pool, min(n, len(pool)))} for _ in (0, 1)]
             t = time.perf_counter()
             s = CFRPlusRiver(root, ranges, Settings()).solve(iterations=args.iterations, check_every=100)
-            curve = ' '.join(f'{i}:{e / root.pot:.4%}' for i, e in s.stats['history'][::2])
+            curve = ' '.join(f'{i}:{e / root.pot:.4%}' for i, _, e in s.stats['history'][::2])
             print(f"{name:20s} n={n:4d} nodes={s.stats['public_decisions']:3d} total={time.perf_counter() - t:6.2f}s "
                   f"solve={s.stats['solve_seconds']:6.2f}s expl(%pot) {curve}", flush=True)
 
